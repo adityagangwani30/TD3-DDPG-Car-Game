@@ -66,19 +66,26 @@ class Car:
             steering: ∈ [-1, 1]  (−1 = hard left, +1 = hard right)
             throttle: ∈ [ 0, 1]  (0 = coast, 1 = full throttle)
         """
-        # Steering
+        # --- Heading update ---
+        # Multiply normalised steering by the maximum turn rate (deg/frame)
+        # and wrap the angle into [0, 360) to avoid accumulation issues.
         self.angle += steering * CAR_TURN_RATE
         self.angle %= 360.0
 
-        # Acceleration / friction
+        # --- Speed update (simplified kinematic model) ---
+        # Throttle adds to speed; proportional drag (Coulomb-style friction)
+        # ensures speed decays naturally when throttle is released.
+        # Speed is clamped to [0, CAR_MAX_SPEED] to prevent reversing.
         self.speed += throttle * CAR_ACCELERATION
-        self.speed -= CAR_FRICTION * self.speed       # drag
+        self.speed -= CAR_FRICTION * self.speed       # drag proportional to speed
         self.speed = max(0.0, min(self.speed, CAR_MAX_SPEED))
 
-        # Movement (angle 0 = right, 90 = up in maths, but y-axis is flipped)
+        # --- Position update (Euler integration) ---
+        # Pygame's y-axis points *downward*, so we negate the sin component
+        # so that angle=0 → move right, angle=90 → move up on screen.
         rad = math.radians(self.angle)
         self.x += self.speed * math.cos(rad)
-        self.y -= self.speed * math.sin(rad)        # y increases downward
+        self.y -= self.speed * math.sin(rad)   # negative because y grows downward
 
     # ------------------------------------------------------------------
     # Sensors (raycasting)
@@ -95,25 +102,31 @@ class Car:
     def _cast_ray(self, angle_deg: float):
         """Cast a single ray from the car centre and return
         (distance, endpoint) to the first off-track pixel.
+
+        Uses a discrete ray-marching approach: step one pixel at a time along
+        the ray direction and sample the Boolean road mask until we hit an
+        off-track pixel or reach SENSOR_MAX_DIST.
         """
         rad = math.radians(angle_deg)
-        dx = math.cos(rad)
-        dy = -math.sin(rad)   # y flipped
+        dx = math.cos(rad)       # unit-step in x per pixel of ray length
+        dy = -math.sin(rad)      # unit-step in y (negated for Pygame's y-down)
 
-        mask_w, mask_h = self.track_mask.shape  # (W, H)
+        mask_w, mask_h = self.track_mask.shape  # (W, H) – note surfarray column order
 
+        # March along the ray one pixel at a time
         for d in range(1, SENSOR_MAX_DIST + 1):
             px = int(round(self.x + dx * d))
             py = int(round(self.y + dy * d))
 
-            # Out-of-bounds counts as off-track
+            # Treat the screen boundary as an off-track wall
             if px < 0 or px >= mask_w or py < 0 or py >= mask_h:
                 return d, (self.x + dx * d, self.y + dy * d)
 
+            # mask[px, py] is True for road pixels; False triggers a hit
             if not self.track_mask[px, py]:
                 return d, (px, py)
 
-        # Max distance reached without hitting boundary
+        # Ray reached max range without hitting any boundary → return full length
         end_x = self.x + dx * SENSOR_MAX_DIST
         end_y = self.y + dy * SENSOR_MAX_DIST
         return SENSOR_MAX_DIST, (end_x, end_y)

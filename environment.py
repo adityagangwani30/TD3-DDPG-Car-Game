@@ -70,25 +70,38 @@ class CarRacingEnv:
         Returns:
             next_state (np.ndarray), reward (float), done (bool), info (dict)
         """
+        # Clip actions to [-1, 1] in case the network output slightly exceeds
+        # the tanh range due to floating-point arithmetic.
         steering = float(np.clip(action[0], -1.0, 1.0))
+        # The actor outputs throttle in [-1, 1] (tanh range); we remap to [0, 1]
+        # so the car always moves forward – reverse gear is not needed here.
         throttle = float((np.clip(action[1], -1.0, 1.0) + 1.0) / 2.0)  # → [0, 1]
 
-        # Advance physics
+        # Advance physics and refresh sensor readings
         self.car.update(steering, throttle)
         self.car.cast_sensors()
 
-        # Collision / termination check
+        # The episode ends the moment the car centre leaves the road mask
         done = self.car.is_off_track()
 
-        # ----- Reward computation -----
+        # ----- Reward shaping -----
+        # Reward design follows three principles:
+        #   1. Survival  – small constant reward encourages the agent to stay
+        #                  on track rather than end episodes quickly.
+        #   2. Progress  – velocity-scaled reward incentivises driving fast
+        #                  (normalised so the maximum speed contribution equals
+        #                  REWARD_VELOCITY_SCALE, keeping scales comparable).
+        #   3. Smoothness – steering penalty discourages erratic, zigzag driving
+        #                  that wastes time and risks leaving the track.
         if done:
+            # Large negative penalty for crashing; ends the episode immediately
             reward = REWARD_CRASH
         else:
-            # Reward for staying alive
+            # Base survival reward – received every non-terminal step
             reward = REWARD_ALIVE
-            # Reward proportional to forward speed
+            # Velocity bonus – higher speed → higher reward (normalised 0→1)
             reward += REWARD_VELOCITY_SCALE * (self.car.speed / CAR_MAX_SPEED)
-            # Penalise excessive steering
+            # Steering smoothness penalty – proportional to absolute steering magnitude
             reward -= REWARD_STEERING_PENALTY * abs(steering)
 
         self.step_count += 1

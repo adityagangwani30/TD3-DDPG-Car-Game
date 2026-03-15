@@ -43,8 +43,11 @@ class Actor(nn.Module):
         self.fc3 = nn.Linear(hidden2, action_dim)
 
     def forward(self, state: torch.Tensor) -> torch.Tensor:
+        # ReLU activations keep gradients healthy in hidden layers
         x = F.relu(self.fc1(state))
         x = F.relu(self.fc2(x))
+        # tanh squashes output to [-1, 1]; matches the continuous action range
+        # expected by the environment (steering ∈ [-1,1], throttle remapped externally)
         return torch.tanh(self.fc3(x))
 
 
@@ -70,12 +73,15 @@ class Critic(nn.Module):
     def forward(self, state: torch.Tensor,
                 action: torch.Tensor):
         """Return (Q1, Q2) values."""
+        # Concatenate state and action so the network can model Q(s,a)
         sa = torch.cat([state, action], dim=1)
 
+        # Q1 branch – independent weights from Q2 to avoid correlated biases
         q1 = F.relu(self.fc1(sa))
         q1 = F.relu(self.fc2(q1))
-        q1 = self.fc3(q1)
+        q1 = self.fc3(q1)   # linear output → unbounded Q-value
 
+        # Q2 branch – same architecture, separate parameters
         q2 = F.relu(self.fc4(sa))
         q2 = F.relu(self.fc5(q2))
         q2 = self.fc6(q2)
@@ -169,48 +175,68 @@ class TD3Agent:
         done = torch.FloatTensor(dones).to(self.device)
 
         # ----------------------------------------------------------
-        # 1. Compute target Q-value
+        # 1. Compute target Q-value  (Bellman backup)
         # ----------------------------------------------------------
         with torch.no_grad():
-            # Target policy smoothing
+            # --- Target policy smoothing (TD3 trick #3) ---
+            # Add small clipped Gaussian noise to the target action.
+            # This smooths the Q-function surface so the actor cannot exploit
+            # spuriously sharp peaks in the value estimate.
             noise = (
                 torch.randn_like(action) * POLICY_NOISE
             ).clamp(-NOISE_CLIP, NOISE_CLIP)
 
+            # Target actor selects the next action (frozen weights → no gradient)
             next_action = (
                 self.actor_target(next_state) + noise
-            ).clamp(-1.0, 1.0)
+            ).clamp(-1.0, 1.0)  # keep action in valid range after adding noise
 
-            # Clipped double-Q: take the minimum of the two target Q-values
+            # --- Clipped double-Q learning (TD3 trick #1) ---
+            # Evaluate both target Q-networks and use the *minimum* as the
+            # Bellman target.  Using min() counters the maximisation bias that
+            # causes Q-values to be over-estimated in standard actor-critic.
             target_q1, target_q2 = self.critic_target(next_state, next_action)
             target_q = torch.min(target_q1, target_q2)
+            # Bellman equation:  y = r + γ · (1 − done) · min(Q1, Q2)
+            # The (1 − done) mask zeros out the bootstrap term for terminal steps
             target_q = reward + (1.0 - done) * GAMMA * target_q
 
         # ----------------------------------------------------------
-        # 2. Update critics
+        # 2. Update critics towards the Bellman target
         # ----------------------------------------------------------
+        # Both Q-networks regress independently onto the same target y.
+        # Summing the two MSE losses is equivalent to updating each critic
+        # separately but is more memory-efficient (single backward pass).
         current_q1, current_q2 = self.critic(state, action)
         critic_loss = F.mse_loss(current_q1, target_q) + \
                       F.mse_loss(current_q2, target_q)
 
         self.critic_optimizer.zero_grad()
-        critic_loss.backward()
+        critic_loss.backward()   # compute gradients w.r.t. critic parameters
         self.critic_optimizer.step()
 
         # ----------------------------------------------------------
-        # 3. Delayed policy update
+        # 3. Delayed policy (actor) update  (TD3 trick #2)
         # ----------------------------------------------------------
+        # The actor is updated less frequently than the critics so that the
+        # Q-value estimates are reasonably accurate before being used to
+        # shape the policy gradient.
         if self.total_it % POLICY_DELAY == 0:
-            # Actor loss: maximise Q1
+            # Actor loss: we *maximise* Q1 by *minimising* its negative mean.
+            # Only Q1 is used here (not min(Q1,Q2)) to avoid introducing
+            # an additional downward bias into the policy gradient.
             actor_loss = -self.critic.q1_forward(
                 state, self.actor(state)
             ).mean()
 
             self.actor_optimizer.zero_grad()
-            actor_loss.backward()
+            actor_loss.backward()  # gradients flow: actor → Q1 → actor params
             self.actor_optimizer.step()
 
-            # Soft-update target networks
+            # Polyak (soft) update of both target networks:
+            # θ_target ← τ·θ_online + (1−τ)·θ_target
+            # Small τ (0.005) makes target networks move slowly, providing
+            # stable regression targets for the critics.
             self._soft_update(self.actor, self.actor_target)
             self._soft_update(self.critic, self.critic_target)
 
