@@ -15,6 +15,7 @@ from config import (
     MAX_EPISODES,
     MAX_STEPS_PER_EPISODE,
     MODEL_DIR,
+    RENDER_EVERY_EPISODES,
     SAVE_MODEL_EVERY,
     TRAINING_START,
 )
@@ -23,11 +24,11 @@ from replay_buffer import ReplayBuffer
 from td3_agent import TD3Agent
 
 
-def _format_lap_time(value: float | None) -> str:
-    """Format lap times consistently in terminal logs."""
-    if value is None:
-        return "--.--s"
-    return f"{value:5.2f}s"
+def _should_render_episode(episode: int) -> bool:
+    """Return True when this episode should be rendered."""
+    if RENDER_EVERY_EPISODES <= 0:
+        return False
+    return episode == 1 or episode % RENDER_EVERY_EPISODES == 0
 
 
 def train(env: CarRacingEnv, agent: TD3Agent):
@@ -41,6 +42,8 @@ def train(env: CarRacingEnv, agent: TD3Agent):
     for episode in range(1, MAX_EPISODES + 1):
         state = env.reset()
         episode_reward = 0.0
+        termination_reason = "max_steps"
+        render_enabled = _should_render_episode(episode)
 
         for step in range(1, MAX_STEPS_PER_EPISODE + 1):
             action = agent.select_action(state, add_noise=True)
@@ -53,10 +56,11 @@ def train(env: CarRacingEnv, agent: TD3Agent):
             if replay_buffer.is_ready(TRAINING_START):
                 agent.train(replay_buffer, BATCH_SIZE)
 
-            env.render()
+            env.render(enabled=render_enabled, limit_fps=False)
             state = next_state
 
             if done:
+                termination_reason = info["termination_reason"]
                 break
 
         reward_history.append(episode_reward)
@@ -64,13 +68,10 @@ def train(env: CarRacingEnv, agent: TD3Agent):
 
         print(
             f"Episode {episode:>5d} | "
-            f"Steps {step:>5d} | "
+            f"Length {step:>5d} | "
             f"Reward {episode_reward:>+8.2f} | "
-            f"Laps {env.laps_completed:>2d} | "
-            f"LastLap {_format_lap_time(env.last_lap_time)} | "
-            f"BestLap {_format_lap_time(env.best_lap_time)} | "
             f"Avg100 {avg_reward:>+8.2f} | "
-            f"Buffer {len(replay_buffer):>7d}"
+            f"End {termination_reason}"
         )
 
         if episode_reward > best_reward:

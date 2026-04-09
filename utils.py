@@ -1,10 +1,9 @@
 """
 utils.py - Utility helpers for the TD3 self-driving car project.
 
-Includes track-mask loading, asset generation, and Pygame text helpers.
+Includes track loading, simple asset generation, and text helpers.
 """
 
-import math
 import os
 
 import numpy as np
@@ -53,39 +52,27 @@ def generate_track_image():
         TRACK_INNER_RADIUS_Y,
     )
 
-    _draw_dashed_ellipse(
+    pygame.draw.ellipse(
         surface,
         TRACK_BORDER_COLOR,
-        TRACK_CENTER_X,
-        TRACK_CENTER_Y,
-        TRACK_OUTER_RADIUS_X - 8,
-        TRACK_OUTER_RADIUS_Y - 8,
-        dash_len=20,
-        gap=15,
+        pygame.Rect(
+            TRACK_CENTER_X - TRACK_OUTER_RADIUS_X + 8,
+            TRACK_CENTER_Y - TRACK_OUTER_RADIUS_Y + 8,
+            2 * (TRACK_OUTER_RADIUS_X - 8),
+            2 * (TRACK_OUTER_RADIUS_Y - 8),
+        ),
         width=3,
     )
-    _draw_dashed_ellipse(
+    pygame.draw.ellipse(
         surface,
         TRACK_BORDER_COLOR,
-        TRACK_CENTER_X,
-        TRACK_CENTER_Y,
-        TRACK_INNER_RADIUS_X + 8,
-        TRACK_INNER_RADIUS_Y + 8,
-        dash_len=20,
-        gap=15,
+        pygame.Rect(
+            TRACK_CENTER_X - TRACK_INNER_RADIUS_X - 8,
+            TRACK_CENTER_Y - TRACK_INNER_RADIUS_Y - 8,
+            2 * (TRACK_INNER_RADIUS_X + 8),
+            2 * (TRACK_INNER_RADIUS_Y + 8),
+        ),
         width=3,
-    )
-
-    _draw_dashed_ellipse(
-        surface,
-        (200, 200, 200),
-        TRACK_CENTER_X,
-        TRACK_CENTER_Y,
-        (TRACK_OUTER_RADIUS_X + TRACK_INNER_RADIUS_X) // 2,
-        (TRACK_OUTER_RADIUS_Y + TRACK_INNER_RADIUS_Y) // 2,
-        dash_len=15,
-        gap=20,
-        width=1,
     )
 
     pygame.image.save(surface, TRACK_IMAGE_PATH)
@@ -96,28 +83,6 @@ def _draw_ellipse(surface, color, cx, cy, rx, ry):
     """Draw a filled ellipse using pygame.draw.ellipse."""
     rect = pygame.Rect(cx - rx, cy - ry, 2 * rx, 2 * ry)
     pygame.draw.ellipse(surface, color, rect)
-
-
-def _draw_dashed_ellipse(surface, color, cx, cy, rx, ry, dash_len=18, gap=12, width=2):
-    """Draw a dashed ellipse outline."""
-    num_points = 360
-    draw = True
-    accum = 0.0
-    prev = None
-    for index in range(num_points + 1):
-        angle = 2 * math.pi * index / num_points
-        x = cx + rx * math.cos(angle)
-        y = cy + ry * math.sin(angle)
-        if prev is not None:
-            seg_len = math.hypot(x - prev[0], y - prev[1])
-            accum += seg_len
-            if draw:
-                pygame.draw.line(surface, color, prev, (x, y), width)
-            threshold = dash_len if draw else gap
-            if accum >= threshold:
-                accum = 0.0
-                draw = not draw
-        prev = (x, y)
 
 
 def generate_car_image():
@@ -146,19 +111,9 @@ def generate_car_image():
 
 def load_track_mask(track_surface: pygame.Surface) -> np.ndarray:
     """Convert a track surface into a boolean mask (True = road)."""
-    arr = pygame.surfarray.array3d(track_surface).astype(np.float32)
-    road = np.array(TRACK_ROAD_COLOR, dtype=np.float32)
-    dist = np.sqrt(np.sum((arr - road) ** 2, axis=2))
-    return dist < 60.0
-
-
-def is_on_track(mask: np.ndarray, x: float, y: float) -> bool:
-    """Return True if the pixel at (x, y) is on the road."""
-    ix, iy = int(round(x)), int(round(y))
-    width, height = mask.shape
-    if ix < 0 or ix >= width or iy < 0 or iy >= height:
-        return False
-    return bool(mask[ix, iy])
+    arr = pygame.surfarray.array3d(track_surface)
+    road = np.array(TRACK_ROAD_COLOR, dtype=arr.dtype)
+    return np.all(arr == road, axis=2)
 
 
 def draw_text(surface, text, x, y, font, color=(255, 255, 255)):

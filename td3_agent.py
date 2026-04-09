@@ -112,7 +112,7 @@ class TD3Agent:
 
     def select_action(self, state: np.ndarray, add_noise: bool = True) -> np.ndarray:
         """Choose an action for the current state."""
-        state_t = torch.FloatTensor(state).unsqueeze(0).to(self.device)
+        state_t = torch.as_tensor(state, dtype=torch.float32, device=self.device).unsqueeze(0)
         with torch.no_grad():
             action = self.actor(state_t).cpu().numpy().flatten()
 
@@ -128,11 +128,11 @@ class TD3Agent:
 
         states, actions, rewards, next_states, dones = replay_buffer.sample(batch_size)
 
-        state = torch.FloatTensor(states).to(self.device)
-        action = torch.FloatTensor(actions).to(self.device)
-        reward = torch.FloatTensor(rewards).to(self.device)
-        next_state = torch.FloatTensor(next_states).to(self.device)
-        done = torch.FloatTensor(dones).to(self.device)
+        state = torch.as_tensor(states, dtype=torch.float32, device=self.device)
+        action = torch.as_tensor(actions, dtype=torch.float32, device=self.device)
+        reward = torch.as_tensor(rewards, dtype=torch.float32, device=self.device)
+        next_state = torch.as_tensor(next_states, dtype=torch.float32, device=self.device)
+        done = torch.as_tensor(dones, dtype=torch.float32, device=self.device)
 
         with torch.no_grad():
             noise = (torch.randn_like(action) * POLICY_NOISE).clamp(-NOISE_CLIP, NOISE_CLIP)

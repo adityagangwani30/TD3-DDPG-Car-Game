@@ -33,7 +33,6 @@ TRACK_OUTER_RADIUS_X = 480
 TRACK_OUTER_RADIUS_Y = 320
 TRACK_INNER_RADIUS_X = 320
 TRACK_INNER_RADIUS_Y = 180
-TRACK_START_ANGLE_DEG = 270.0
 FINISH_LINE_WIDTH = 6
 
 # ---------------------------------------------------------------------------
@@ -42,9 +41,6 @@ FINISH_LINE_WIDTH = 6
 TRACK_ROAD_COLOR = (60, 60, 60)
 TRACK_GRASS_COLOR = (34, 139, 34)
 TRACK_BORDER_COLOR = (255, 255, 255)
-
-# Pixel brightness threshold retained for future image-based track parsing.
-ROAD_BRIGHTNESS_THRESHOLD = 100
 
 # ---------------------------------------------------------------------------
 # Car physics
@@ -81,8 +77,6 @@ ACTION_DIM = 2
 REWARD_ALIVE = 0.1
 REWARD_VELOCITY_SCALE = 1.0
 REWARD_STEERING_PENALTY = 0.1
-REWARD_PROGRESS_SCALE = 75.0
-REWARD_LAP_COMPLETION = 25.0
 REWARD_CRASH = -10.0
 
 # ---------------------------------------------------------------------------
@@ -90,6 +84,7 @@ REWARD_CRASH = -10.0
 # ---------------------------------------------------------------------------
 STUCK_SPEED_THRESHOLD = 0.15
 STUCK_STEP_LIMIT = 180
+MIN_LAP_STEPS = 120
 
 # ---------------------------------------------------------------------------
 # TD3 hyper-parameters
@@ -103,13 +98,13 @@ POLICY_NOISE = 0.2
 NOISE_CLIP = 0.5
 EXPLORATION_NOISE = 0.1
 
-HIDDEN_DIM_1 = 256
-HIDDEN_DIM_2 = 256
+HIDDEN_DIM_1 = 128
+HIDDEN_DIM_2 = 128
 
 # ---------------------------------------------------------------------------
 # Replay buffer
 # ---------------------------------------------------------------------------
-BUFFER_CAPACITY = 1_000_000
+BUFFER_CAPACITY = 200_000
 BATCH_SIZE = 256
 
 # ---------------------------------------------------------------------------
@@ -117,5 +112,6 @@ BATCH_SIZE = 256
 # ---------------------------------------------------------------------------
 MAX_EPISODES = 5000
 MAX_STEPS_PER_EPISODE = 2000
-TRAINING_START = BATCH_SIZE
+TRAINING_START = 5000
 SAVE_MODEL_EVERY = 100
+RENDER_EVERY_EPISODES = 25

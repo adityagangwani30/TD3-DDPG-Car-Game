@@ -15,13 +15,11 @@ import pygame
 from config import (
     CAR_ACCELERATION,
     CAR_FRICTION,
-    CAR_HEIGHT,
     CAR_MAX_SPEED,
     CAR_START_ANGLE,
     CAR_START_X,
     CAR_START_Y,
     CAR_TURN_RATE,
-    CAR_WIDTH,
     NUM_SENSORS,
     SCREEN_HEIGHT,
     SCREEN_WIDTH,
@@ -37,7 +35,6 @@ class Car:
     def __init__(self, track_mask: np.ndarray, car_image: pygame.Surface):
         self.track_mask = track_mask
         self.original_image = car_image
-        self.image = car_image
 
         self.x = CAR_START_X
         self.y = CAR_START_Y
