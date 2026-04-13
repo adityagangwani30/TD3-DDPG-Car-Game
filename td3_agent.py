@@ -6,6 +6,7 @@ Implements the actor, critic networks, and the TD3 agent with:
   - delayed policy updates
   - target policy smoothing
   - soft target updates
+  - gradient clipping for stability
 """
 
 import copy
@@ -19,8 +20,8 @@ from config import (
     ACTOR_LR,
     ACTION_DIM,
     CRITIC_LR,
-    EXPLORATION_NOISE,
     GAMMA,
+    GRADIENT_CLIP_MAX_NORM,
     HIDDEN_DIM_1,
     HIDDEN_DIM_2,
     NOISE_CLIP,
@@ -110,20 +111,20 @@ class TD3Agent:
 
         self.total_it = 0
 
-    def select_action(self, state: np.ndarray, add_noise: bool = True) -> np.ndarray:
-        """Choose an action for the current state."""
+    def select_action(self, state: np.ndarray, add_noise: bool = True, noise_scale: float = 0.1) -> np.ndarray:
+        """Choose an action for the current state with optional exploration noise."""
         state_t = torch.as_tensor(state, dtype=torch.float32, device=self.device).unsqueeze(0)
         with torch.no_grad():
             action = self.actor(state_t).cpu().numpy().flatten()
 
         if add_noise:
-            noise = np.random.normal(0, EXPLORATION_NOISE, size=ACTION_DIM)
+            noise = np.random.normal(0, noise_scale, size=ACTION_DIM)
             action = action + noise
 
         return np.clip(action, -1.0, 1.0)
 
     def train(self, replay_buffer, batch_size: int):
-        """Perform one TD3 training step."""
+        """Perform one TD3 training step with gradient clipping."""
         self.total_it += 1
 
         states, actions, rewards, next_states, dones = replay_buffer.sample(batch_size)
@@ -147,6 +148,7 @@ class TD3Agent:
 
         self.critic_optimizer.zero_grad()
         critic_loss.backward()
+        torch.nn.utils.clip_grad_norm_(self.critic.parameters(), max_norm=GRADIENT_CLIP_MAX_NORM)
         self.critic_optimizer.step()
 
         if self.total_it % POLICY_DELAY == 0:
@@ -154,6 +156,7 @@ class TD3Agent:
 
             self.actor_optimizer.zero_grad()
             actor_loss.backward()
+            torch.nn.utils.clip_grad_norm_(self.actor.parameters(), max_norm=GRADIENT_CLIP_MAX_NORM)
             self.actor_optimizer.step()
 
             self._soft_update(self.actor, self.actor_target)

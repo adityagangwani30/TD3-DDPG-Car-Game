@@ -96,14 +96,7 @@ def generate_car_image():
         (2, 4, CAR_WIDTH - 4, CAR_HEIGHT - 8),
         border_radius=4,
     )
-    pygame.draw.rect(
-        surface,
-        (140, 200, 255),
-        (4, 6, CAR_WIDTH - 8, 10),
-        border_radius=2,
-    )
-    pygame.draw.rect(surface, (255, 200, 0), (3, CAR_HEIGHT - 10, 5, 4))
-    pygame.draw.rect(surface, (255, 200, 0), (CAR_WIDTH - 8, CAR_HEIGHT - 10, 5, 4))
+    # Simple car sprite (removed extra details for clarity)
 
     pygame.image.save(surface, CAR_IMAGE_PATH)
     print(f"[utils] Car sprite saved  -> {CAR_IMAGE_PATH}")

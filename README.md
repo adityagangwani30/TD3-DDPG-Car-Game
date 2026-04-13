@@ -1,103 +1,132 @@
 # TD3 Self-Driving Car
+# TD3 Self-Driving Car - Enhanced Edition
 
-A small reinforcement learning project where a car learns to drive around a simple oval track using TD3, PyTorch, and Pygame.
+A reinforcement learning project where a car learns to drive around an oval track using TD3 (Twin Delayed DDPG), PyTorch, and Pygame.
 
-## Overview
+## 🚀 What's New?
 
-The agent observes:
+This enhanced version includes major improvements:
+- ✅ **Improved Reward Function** - Lap completion bonuses, reduced crash penalty, smoother steering incentives
+- ✅ **Speed-Dependent Steering** - Realistic turning behavior (turn less at high speed)
+- ✅ **Sensor Noise** - More realistic and robust sensor readings
+- ✅ **Exploration Noise Decay** - Automatic reduction of exploration over episodes
+- ✅ **Gradient Clipping** - Stable training with bounded gradients
+- ✅ **Comprehensive Metrics** - Real-time tracking of training progress
+- ✅ **Evaluation Mode** - Test trained agents without exploration noise
+- ✅ **Model Comparison** - Evaluate multiple checkpoints
+- ✅ **Visualization** - Plot training metrics and progress
+- ✅ **Difficulty Settings** - Easy/normal/hard modes for future expansion
+- ✅ **Reduced Complexity** - Simplified sensor count (5→3), network size (128→64)
 
-- normalized car position `(x, y)`
-- normalized speed
-- normalized heading angle
-- five ray sensors pointing around the car
-
-The agent outputs:
-
-- steering in `[-1, 1]`
-- throttle in `[-1, 1]`, remapped to `[0, 1]` inside the environment
-
-The environment is intentionally simple:
-
-- episode ends if the car center goes off track
-- episode also ends if the car stays nearly stationary for too long
-- reward is `alive_bonus + speed_bonus - steering_penalty`
-- crash gives a terminal penalty
-
-Lap timing is tracked only for display in the HUD.
-
-## Project Structure
+## 📋 Project Structure
 
 ```text
-TD3 Car Game/
-|-- main.py
-|-- config.py
-|-- environment.py
-|-- car.py
-|-- td3_agent.py
-|-- replay_buffer.py
-|-- train.py
-|-- utils.py
-|-- requirements.txt
-|-- assets/
-|   |-- track.png
-|   `-- car.png
-`-- models/
+td3-car-game/
+├── main.py                  # Entry point (train or eval)
+├── config.py                # All hyperparameters and settings
+├── car.py                   # Car physics, sensors, raycasting
+├── environment.py           # RL environment, rewards, rendering
+├── lap_timer.py             # Lap timing and finish line detection
+├── td3_agent.py             # TD3 agent, actor, critic networks
+├── replay_buffer.py         # Experience replay buffer
+├── train.py                 # Training loop and evaluation function
+├── metrics_tracker.py       # Comprehensive metrics tracking
+├── plot_metrics.py          # Visualization of training progress
+├── eval_models.py           # Model comparison and evaluation
+├── utils.py                 # Asset generation and helpers
+├── requirements.txt         # Python dependencies
+└── assets/, models/, logs/  # Generated during runtime
 ```
 
-## Main Components
+## 🎮 Observation & Action Spaces
 
-- `main.py`: starts Pygame, creates the environment and agent, and launches training
-- `config.py`: central place for hyperparameters and environment settings
-- `environment.py`: reset/step/render logic, reward calculation, done logic, and lap timing display
-- `car.py`: simple top-down car physics and ray sensor casting
-- `td3_agent.py`: actor, critic, and TD3 training step
-- `replay_buffer.py`: fixed-size replay memory
-- `train.py`: episode loop, replay insertion, network updates, and terminal logging
-- `utils.py`: asset generation, track mask creation, and text drawing helpers
+**State (9 dimensions)**
+- Position: (x, y) normalized to [0, 1]
+- Speed: normalized to [0, 1] (max = 8.0)
+- Angle: normalized to [0, 1]
+- **3 sensors**: front-left, front, front-right with noise
 
-## Running
+**Action (2 continuous)**
+- Steering: [-1, 1] with speed-dependent turning
+- Throttle: [0, 1] (forward motion only)
 
-Install dependencies:
+## 💾 Installation
 
 ```bash
 pip install -r requirements.txt
 ```
 
-Start training:
+## 🎯 Quick Start
 
+### Train
 ```bash
 python main.py
+
+## Evaluate
+```bash
+python main.py --mode eval --checkpoint models/td3_best.pth
 ```
 
-## Training Output
-
-The terminal logs a compact summary per episode:
-
-```text
-Episode     1 | Length   150 | Reward   +59.52 | Avg100   +59.52 | End max_steps
+## Compare Models
+```bash
+python eval_models.py --episodes 20
 ```
 
-Where:
+## Plot Metrics
+```bash
+python plot_metrics.py
+```
 
-- `Length` is the number of steps in the episode
-- `Reward` is the total episode reward
-- `Avg100` is the moving average reward over the last 100 episodes
-- `End` is the termination reason: `off_track`, `stuck`, or `max_steps`
+## 🔧 Configuration
 
-By default, rendering is not shown every episode so training can run faster.
+Edit `config.py` to tune:
+- Training parameters (episodes, batch size, learning rates)
+- Physics (speed, friction, steering)
+- Rewards (bonuses and penalties)
+- Sensors (noise, angles, count)
+- Rendering (enable/disable for speed)
 
-## Key Configuration
+## 📊 Training Progress
 
-Important settings in `config.py`:
+Metrics logged to `logs/training_log.jsonl` include:
+- Episode reward and moving average
+- Crashes, laps completed, lap times
+- Speed statistics and steering smoothness
+- Network losses and buffer utilization
 
-- `MAX_EPISODES`
-- `MAX_STEPS_PER_EPISODE`
-- `BUFFER_CAPACITY`
-- `TRAINING_START`
-- `BATCH_SIZE`
-- `HIDDEN_DIM_1`, `HIDDEN_DIM_2`
-- `RENDER_EVERY_EPISODES`
-- `STUCK_SPEED_THRESHOLD`, `STUCK_STEP_LIMIT`
+Monitor training with:
+```bash
+python plot_metrics.py  # Generate plots
+tail -f logs/training_log.jsonl  # Watch live
+```
+
+## 🐛 Troubleshooting
+
+**Slow training**: Set `RENDER_DURING_TRAINING = False` in config
+
+**Agent doesn't learn**: Check `TRAINING_START`, `BATCH_SIZE`, and reward function
+
+**Frequent crashes**: Reduce `CAR_MAX_SPEED` or increase steering penalty
+
+## 📚 Key Concepts
+
+- **TD3**: Twin Delayed DDPG for off-policy continuous control
+- **Replay Buffer**: Store and sample past experiences
+- **Target Networks**: Separate networks for stable learning
+- **Exploration Decay**: Gradually reduce randomness during training
+
+## 🎬 Expected Progress
+
+| Episode | Avg Reward | Laps | Crashes | Status |
+|---------|-----------|------|---------|--------|
+| 100     | ~0        | 0    | 90%     | Random |
+| 500     | 20-50     | 1-2  | 50%     | Learning |
+| 1500    | 100-130   | 8-10 | 20%     | Good |
+| 2500+   | 150+      | 12+  | <10%    | Excellent |
+
+## 📝 License
+
+MIT - Use freely for learning!
 
 ## Notes
 
