@@ -1,135 +1,282 @@
 # TD3 Self-Driving Car
-# TD3 Self-Driving Car - Enhanced Edition
 
-A reinforcement learning project where a car learns to drive around an oval track using TD3 (Twin Delayed DDPG), PyTorch, and Pygame.
+A beginner-friendly reinforcement learning project that trains an autonomous car to drive around a simple oval track using **TD3** (Twin Delayed Deep Deterministic Policy Gradient), **PyTorch**, and **Pygame**.
 
-## 🚀 What's New?
+## 🚀 Project Overview
 
-This enhanced version includes major improvements:
-- ✅ **Improved Reward Function** - Lap completion bonuses, reduced crash penalty, smoother steering incentives
-- ✅ **Speed-Dependent Steering** - Realistic turning behavior (turn less at high speed)
-- ✅ **Sensor Noise** - More realistic and robust sensor readings
-- ✅ **Exploration Noise Decay** - Automatic reduction of exploration over episodes
-- ✅ **Gradient Clipping** - Stable training with bounded gradients
-- ✅ **Comprehensive Metrics** - Real-time tracking of training progress
-- ✅ **Evaluation Mode** - Test trained agents without exploration noise
-- ✅ **Model Comparison** - Evaluate multiple checkpoints
-- ✅ **Visualization** - Plot training metrics and progress
-- ✅ **Difficulty Settings** - Easy/normal/hard modes for future expansion
-- ✅ **Reduced Complexity** - Simplified sensor count (5→3), network size (128→64)
+This project simulates a small top-down driving environment where an RL agent learns to control a car using continuous steering and throttle commands.
 
-## 📋 Project Structure
+It solves a simple but useful control problem:
+
+- keep the car on the track
+- avoid crashing or getting stuck
+- complete laps as efficiently as possible
+
+TD3 is used because it works well for **continuous action spaces**, which makes it a good fit for driving control.
+
+## 🧠 About TD3 Algorithm
+
+TD3 is an off-policy actor-critic algorithm designed for stable learning in continuous-control tasks.
+
+### Core ideas
+
+- **Actor**: learns the policy, meaning it decides what action to take in each state.
+- **Critic**: estimates how good an action is by predicting the Q-value.
+- **Target networks**: slower-moving copies of the actor and critic used for stable training.
+- **Delayed updates**: the actor is updated less often than the critic.
+- **Target policy smoothing**: small noise is added to target actions to reduce overestimation.
+
+### Why TD3 instead of DDPG?
+
+TD3 improves on DDPG by reducing common training problems such as Q-value overestimation and unstable policy updates. In practice, this usually means:
+
+- more stable learning
+- less noisy value estimates
+- better performance on continuous control tasks
+
+## 🎮 Environment & Game Description
+
+The environment is a simple 2D oval track viewed from above.
+
+### How it works
+
+- The car starts at a fixed position and heading.
+- The agent controls two continuous actions:
+	- **steering** in `[-1, 1]`
+	- **throttle** in `[0, 1]` for forward motion only
+- The car moves with a lightweight physics model.
+- Ray sensors detect how far the track boundary is in front of the car.
+
+### State space
+
+The observation contains:
+
+- normalized `x` position
+- normalized `y` position
+- normalized speed
+- normalized heading angle
+- 3 normalized sensor distances
+
+Total state size: **9 dimensions**.
+
+### Action space
+
+The agent outputs 2 continuous values:
+
+- `steering`: left/right turning control
+- `throttle`: forward acceleration only
+
+### Goals and constraints
+
+- Stay on the road
+- Move forward smoothly
+- Complete laps
+- Avoid getting stuck
+
+The project intentionally stays simple so the RL problem remains easy to understand and debug.
+
+## 🏆 Reward Function
+
+The reward is designed to encourage safe forward driving and lap completion, not just raw speed.
+
+Current structure:
+
+- small positive reward for surviving each step
+- extra reward for moving instead of remaining stuck
+- large bonus for completing a lap
+- penalty for sharp steering
+- negative reward when the car goes off track or gets stuck
+
+### Why this structure?
+
+The reward needs to avoid “reward hacking,” where the agent learns to collect reward without actually driving well.
+
+This design keeps the objective clear:
+
+- drive forward
+- stay on the track
+- finish laps
+
+## 📊 Metrics & Evaluation
+
+The project tracks training metrics to make learning easier to inspect.
+
+### Metrics tracked
+
+- episode reward
+- average reward over recent episodes
+- episode length
+- lap completions
+- collision/off-track count
+- average speed
+- steering smoothness
+- exploration noise level
+- replay buffer size
+
+### How performance is evaluated
+
+Performance is judged using:
+
+- total episode reward
+- number of completed laps
+- crash rate
+- average episode length
+- stability of learning over time
+
+Training logs are written in JSON Lines format so they can be plotted or analyzed later.
+
+## 🛠️ Tech Stack
+
+- **Python** - main programming language
+- **PyTorch** - neural networks and RL training
+- **Pygame** - environment rendering and visualization
+- **NumPy** - numerical operations and replay buffer storage
+
+## 📂 Project Structure
 
 ```text
 td3-car-game/
-├── main.py                  # Entry point (train or eval)
-├── config.py                # All hyperparameters and settings
-├── car.py                   # Car physics, sensors, raycasting
-├── environment.py           # RL environment, rewards, rendering
-├── lap_timer.py             # Lap timing and finish line detection
-├── td3_agent.py             # TD3 agent, actor, critic networks
-├── replay_buffer.py         # Experience replay buffer
-├── train.py                 # Training loop and evaluation function
-├── metrics_tracker.py       # Comprehensive metrics tracking
-├── plot_metrics.py          # Visualization of training progress
-├── eval_models.py           # Model comparison and evaluation
-├── utils.py                 # Asset generation and helpers
-├── requirements.txt         # Python dependencies
-└── assets/, models/, logs/  # Generated during runtime
+├── main.py              # Entry point for training and evaluation
+├── train.py             # Training loop and evaluation logic
+├── environment.py       # Driving environment, reward function, rendering
+├── car.py               # Car physics and sensor raycasting
+├── td3_agent.py         # Actor, critic, and TD3 training logic
+├── replay_buffer.py     # Experience replay memory
+├── config.py            # Hyperparameters and project settings
+├── utils.py             # Asset generation and helper functions
+├── lap_timer.py         # Lap timing and finish-line tracking
+├── metrics_tracker.py   # Training metrics and logging
+├── plot_metrics.py      # Plot training logs
+├── eval_models.py       # Compare saved models
+├── assets/              # Generated images for track and car
+├── models/              # Saved checkpoints
+├── logs/                # Training logs and plots
+└── requirements.txt     # Python dependencies
 ```
 
-## 🎮 Observation & Action Spaces
+### File roles
 
-**State (9 dimensions)**
-- Position: (x, y) normalized to [0, 1]
-- Speed: normalized to [0, 1] (max = 8.0)
-- Angle: normalized to [0, 1]
-- **3 sensors**: front-left, front, front-right with noise
+- `main.py`: starts the app in training or evaluation mode
+- `train.py`: collects experience, trains the TD3 agent, saves checkpoints
+- `environment.py`: simulates the car-driving task and computes rewards
+- `car.py`: handles movement, steering, and raycasting sensors
+- `td3_agent.py`: defines actor/critic networks and TD3 updates
+- `replay_buffer.py`: stores past transitions for off-policy learning
+- `config.py`: central place for hyperparameters and environment settings
+- `utils.py`: generates assets and handles shared helper functions
+- `lap_timer.py`: keeps lap time logic separate from the environment
+- `metrics_tracker.py`: records and summarizes training statistics
+- `plot_metrics.py`: creates charts from saved logs
+- `eval_models.py`: runs benchmark-style evaluation across checkpoints
 
-**Action (2 continuous)**
-- Steering: [-1, 1] with speed-dependent turning
-- Throttle: [0, 1] (forward motion only)
+## ⚙️ Installation & Setup
 
-## 💾 Installation
+### 1. Clone the repository
+
+```bash
+git clone <your-repo-url>
+cd td3-car-game
+```
+
+### 2. Create and activate a virtual environment
+
+```bash
+python -m venv venv
+venv\Scripts\activate
+```
+
+### 3. Install dependencies
 
 ```bash
 pip install -r requirements.txt
 ```
 
-## 🎯 Quick Start
+### 4. Run the project once
 
-### Train
+The first run will generate the track and car assets automatically if they are missing.
+
+## ▶️ How to Run
+
+### Train the agent
+
 ```bash
 python main.py
+```
 
-## Evaluate
+### Evaluate a trained checkpoint
+
 ```bash
 python main.py --mode eval --checkpoint models/td3_best.pth
 ```
 
-## Compare Models
+### Compare multiple saved models
+
 ```bash
-python eval_models.py --episodes 20
+python eval_models.py --episodes 10
 ```
 
-## Plot Metrics
+### Plot training metrics
+
 ```bash
 python plot_metrics.py
 ```
 
-## 🔧 Configuration
+## 📈 Results / Observations
 
-Edit `config.py` to tune:
-- Training parameters (episodes, batch size, learning rates)
-- Physics (speed, friction, steering)
-- Rewards (bonuses and penalties)
-- Sensors (noise, angles, count)
-- Rendering (enable/disable for speed)
+Because this is a basic RL project, results depend on random seeds, training duration, and reward tuning. In general, a successful run should show:
 
-## 📊 Training Progress
+- rising average episode reward over time
+- fewer crashes as training progresses
+- more frequent lap completions
+- smoother steering behavior
 
-Metrics logged to `logs/training_log.jsonl` include:
-- Episode reward and moving average
-- Crashes, laps completed, lap times
-- Speed statistics and steering smoothness
-- Network losses and buffer utilization
+### Limitations
 
-Monitor training with:
-```bash
-python plot_metrics.py  # Generate plots
-tail -f logs/training_log.jsonl  # Watch live
-```
+- the physics model is intentionally simple
+- the track is basic and not highly realistic
+- the agent only sees ray sensor distances, not a full map
+- results may vary significantly between runs
 
-## 🐛 Troubleshooting
+## ✨ Features
 
-**Slow training**: Set `RENDER_DURING_TRAINING = False` in config
+- TD3 implementation for continuous control
+- simple top-down driving environment
+- forward-only car motion
+- speed-dependent steering
+- noisy ray sensors for robustness
+- reward shaping for safe racing behavior
+- model checkpointing
+- evaluation mode
+- metrics logging and plotting
+- lightweight and beginner-friendly structure
 
-**Agent doesn't learn**: Check `TRAINING_START`, `BATCH_SIZE`, and reward function
+## 🔮 Future Improvements
 
-**Frequent crashes**: Reduce `CAR_MAX_SPEED` or increase steering penalty
+Possible next steps that stay realistic and simple:
 
-## 📚 Key Concepts
+- add more track layouts
+- add a clearer difficulty selector
+- compare reward variations systematically
+- add a small evaluation dashboard
+- store training curves automatically after each run
 
-- **TD3**: Twin Delayed DDPG for off-policy continuous control
-- **Replay Buffer**: Store and sample past experiences
-- **Target Networks**: Separate networks for stable learning
-- **Exploration Decay**: Gradually reduce randomness during training
+## 🤝 Contributing
 
-## 🎬 Expected Progress
+Contributions are welcome if they keep the project simple and readable.
 
-| Episode | Avg Reward | Laps | Crashes | Status |
-|---------|-----------|------|---------|--------|
-| 100     | ~0        | 0    | 90%     | Random |
-| 500     | 20-50     | 1-2  | 50%     | Learning |
-| 1500    | 100-130   | 8-10 | 20%     | Good |
-| 2500+   | 150+      | 12+  | <10%    | Excellent |
+Good contribution ideas:
 
-## 📝 License
+- improve documentation
+- add new plots for training analysis
+- refine the reward function
+- test different physics constants
 
-MIT - Use freely for learning!
+## 📜 License
+
+No explicit license file is included in the repository at the moment. If you plan to publish or share the project, add a license that matches your intended usage.
 
 ## Notes
 
-- The TD3 core logic is standard and intentionally kept separate from the environment logic.
-- Assets are generated automatically if they are missing.
-- Best and last lap times persist across episode resets for display.
+- The code is intentionally kept beginner-friendly rather than highly optimized.
+- Assets are generated automatically when missing.
+- Training is easier to inspect if rendering is disabled during long runs.
