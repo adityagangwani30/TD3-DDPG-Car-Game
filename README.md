@@ -2,6 +2,27 @@
 
 A beginner-friendly reinforcement learning project that trains an autonomous car to drive around a simple oval track using **TD3** (Twin Delayed Deep Deterministic Policy Gradient), **PyTorch**, and **Pygame**.
 
+## 🚀 Run on Google Colab
+
+[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/adityagangwani30/TD3-Car-Game/blob/main/colab_demo.ipynb)
+
+Use the notebook above for a one-click Colab experience. It clones this repository, installs dependencies, checks for GPU support, and runs a short demo so you can verify everything quickly.
+
+### Quick Demo
+
+If you want a short run locally, use demo mode:
+
+```bash
+python main.py --mode demo
+```
+
+This uses a saved checkpoint if one is available and finishes in a few minutes.
+
+### Colab vs Local
+
+- **Colab**: best for a fast demo, GPU checks, and a browser-based walkthrough
+- **Local**: best for longer training runs and interactive rendering
+
 ## 🚀 Project Overview
 
 This project simulates a small top-down driving environment where an RL agent learns to control a car using continuous steering and throttle commands.
