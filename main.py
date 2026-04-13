@@ -46,29 +46,6 @@ def _find_default_checkpoint() -> str | None:
     return None
 
 
-def _find_latest_training_checkpoint() -> str | None:
-    """Return the most recent periodic training checkpoint, if one exists."""
-    checkpoints = []
-    for candidate in Path("models").glob("td3_ep*.pth"):
-        stem = candidate.stem
-        try:
-            episode_number = int(stem.replace("td3_ep", ""))
-        except ValueError:
-            continue
-        checkpoints.append((episode_number, candidate))
-
-    if checkpoints:
-        checkpoints.sort(key=lambda item: item[0], reverse=True)
-        return str(checkpoints[0][1])
-
-    best_candidates = [Path("models/td3_best_avg100.pth"), Path("models/td3_best.pth")]
-    for candidate in best_candidates:
-        if candidate.exists():
-            return str(candidate)
-
-    return None
-
-
 def _find_resume_candidates() -> list[str]:
     """Return resume candidates ordered from most to least preferred."""
     candidates: list[Path] = []
