@@ -8,6 +8,7 @@ exploration noise decay, and comprehensive metrics tracking.
 import os
 
 import numpy as np
+import pygame
 
 from config import (
     BATCH_SIZE,
@@ -31,7 +32,7 @@ from td3_agent import TD3Agent
 def _should_render_episode(episode: int) -> bool:
     """Return True when this episode should be rendered."""
     if RENDER_EVERY_EPISODES <= 0:
-        return False
+        return True
     return episode == 1 or episode % RENDER_EVERY_EPISODES == 0
 
 
@@ -50,7 +51,9 @@ def train(env: CarRacingEnv, agent: TD3Agent):
         state = env.reset()
         episode_reward = 0.0
         termination_reason = "max_steps"
-        render_enabled = _should_render_episode(episode) and not RENDER_DURING_TRAINING
+        # Keep the old behavior locally: show the visual window during training.
+        # If rendering is disabled in config, this stays off for headless/fast runs.
+        render_enabled = RENDER_DURING_TRAINING
 
         for step in range(1, MAX_STEPS_PER_EPISODE + 1):
             # Use decaying exploration noise
@@ -109,7 +112,8 @@ def train(env: CarRacingEnv, agent: TD3Agent):
 
 
 def evaluate(env: CarRacingEnv, agent: TD3Agent, num_episodes: int = 10, 
-             render: bool = True, checkpoint_path: str | None = None) -> dict:
+             render: bool = True, checkpoint_path: str | None = None,
+             preview_path: str | None = None) -> dict:
     """
     Evaluate a trained agent without exploration noise.
     
@@ -142,6 +146,7 @@ def evaluate(env: CarRacingEnv, agent: TD3Agent, num_episodes: int = 10,
         episode_reward = 0.0
         episode_length = 0
         episode_laps = 0
+        preview_saved = False
 
         while not done:
             # Deterministic action (no noise)
@@ -155,6 +160,10 @@ def evaluate(env: CarRacingEnv, agent: TD3Agent, num_episodes: int = 10,
 
             if render:
                 env.render(enabled=True, limit_fps=True)
+                if preview_path and not preview_saved:
+                    os.makedirs(os.path.dirname(preview_path), exist_ok=True)
+                    pygame.image.save(env.screen, preview_path)
+                    preview_saved = True
 
         results["total_rewards"].append(episode_reward)
         results["episode_lengths"].append(episode_length)

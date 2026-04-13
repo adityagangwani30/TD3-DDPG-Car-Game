@@ -24,7 +24,7 @@ SCREEN_WIDTH = 1200
 SCREEN_HEIGHT = 800
 FPS = 60
 WINDOW_TITLE = "TD3 Self-Driving Car"
-RENDER_DURING_TRAINING = False  # Disable for 5-10x speedup
+RENDER_DURING_TRAINING = True  # Show visuals during local training runs
 
 # ---------------------------------------------------------------------------
 # Track geometry

@@ -8,6 +8,8 @@ A beginner-friendly reinforcement learning project that trains an autonomous car
 
 Use the notebook above for a one-click Colab experience. It clones this repository, installs dependencies, checks for GPU support, and runs a short demo so you can verify everything quickly.
 
+Because Colab is headless, it does not open a normal desktop pygame window. Instead, the notebook runs the simulation and displays a saved preview frame inline.
+
 ### Quick Demo
 
 If you want a short run locally, use demo mode:
@@ -17,6 +19,28 @@ python main.py --mode demo
 ```
 
 This uses a saved checkpoint if one is available and finishes in a few minutes.
+
+In Colab, the same demo mode runs headless and saves a preview image for inline display.
+
+### Train From Scratch or Resume Training
+
+By default, training starts from scratch:
+
+```bash
+python main.py
+```
+
+To continue from the latest saved checkpoint, use:
+
+```bash
+python main.py --mode train --resume
+```
+
+To resume from a specific checkpoint, use:
+
+```bash
+python main.py --mode train --checkpoint models/td3_ep900.pth
+```
 
 ### Colab vs Local
 
