@@ -54,6 +54,7 @@ class MetricsTracker:
         self.episode_lengths = []
         self.episode_speeds = []
         self.episode_steerings = []
+        self.termination_counts = defaultdict(int)
         self.laps_completed = 0
         self.collisions = 0
 
@@ -89,7 +90,17 @@ class MetricsTracker:
                 "episode": episode,
                 "reward_total": 0.0,
                 "reward_mean": 0.0,
+                "reward_std": 0.0,
                 "length": 0,
+                "speed_mean": 0.0,
+                "speed_max": 0.0,
+                "steering_smooth": 0.0,
+                "laps_completed": 0,
+                "collisions": 0,
+                "termination_reason": "unknown",
+                "critic_loss_mean": np.mean(self.critic_losses) if self.critic_losses else None,
+                "actor_loss_mean": np.mean(self.actor_losses) if self.actor_losses else None,
+                "buffer_size": self.buffer_sizes[-1] if self.buffer_sizes else 0,
             }
         
         total_reward = sum(self.episode_rewards)

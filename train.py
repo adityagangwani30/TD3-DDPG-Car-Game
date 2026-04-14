@@ -60,7 +60,12 @@ def train_with_config(
     set_global_seed(resolved_seed)
 
     replay_buffer = ReplayBuffer(BUFFER_CAPACITY)
-    metrics = env.metrics or MetricsTracker()
+    metrics = env.metrics or MetricsTracker(
+        experiment_name=experiment_name,
+        reward_mode=getattr(env, "reward_mode", None),
+        sensor_noise_std=getattr(env, "sensor_noise_std", None),
+        seed=resolved_seed,
+    )
     target_model_dir = model_dir or MODEL_DIR
     os.makedirs(target_model_dir, exist_ok=True)
 
@@ -112,6 +117,7 @@ def train_with_config(
 
         # Compute episode summary for metrics
         episode_summary = metrics.get_episode_summary(episode)
+        episode_summary["reward_rolling_avg_100"] = float(avg_reward_100)
         episode_summary["exploration_noise"] = exploration_noise
         episode_summary["replay_buffer_size"] = len(replay_buffer)
         metrics.log_episode(episode_summary)
