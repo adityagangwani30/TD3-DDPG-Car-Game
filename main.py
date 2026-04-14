@@ -13,6 +13,7 @@ Examples:
 
 import argparse
 import os
+<<<<<<< HEAD
 import sys
 from pathlib import Path
 
@@ -24,12 +25,34 @@ if HEADLESS:
     os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
     os.environ.setdefault("SDL_AUDIODRIVER", "dummy")
 
+=======
+>>>>>>> dd7ca13774afbb2769a861a5c54b1c48e33d362d
 import pygame
 import torch
 
+from config import DEFAULT_SEED
 from environment import CarRacingEnv
 from td3_agent import TD3Agent
 from train import train, evaluate
+from utils import init_pygame, set_global_seed
+
+
+def _resolve_checkpoint(requested: str | None) -> str | None:
+    """Resolve checkpoint path with sensible defaults for eval/demo runs."""
+    if requested:
+        if os.path.exists(requested):
+            return requested
+        print(f"[main] Checkpoint not found: {requested}")
+        return None
+
+    candidates = [
+        os.path.join("models", "td3_best_avg100.pth"),
+        os.path.join("models", "td3_best.pth"),
+    ]
+    for path in candidates:
+        if os.path.exists(path):
+            return path
+    return None
 
 
 def _find_default_checkpoint() -> str | None:
@@ -85,14 +108,12 @@ def _try_load_checkpoint(agent: TD3Agent, checkpoint_path: str, required: bool) 
 
 def main():
     """Initialize Pygame, create the environment, and run training or evaluation."""
-    parser = argparse.ArgumentParser(
-        description="TD3 Self-Driving Car - Training and Evaluation"
-    )
+    parser = argparse.ArgumentParser(description="TD3 Self-Driving Car - Training/Eval/Demo")
     parser.add_argument(
         "--mode", 
         choices=["train", "eval", "demo"], 
         default="train",
-        help="Run training or evaluation (default: train)"
+        help="Run training, evaluation, or demo playback (default: train)"
     )
     parser.add_argument(
         "--checkpoint", 
@@ -122,15 +143,40 @@ def main():
         action="store_true", 
         help="Render evaluation episodes"
     )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=DEFAULT_SEED,
+        help=f"Random seed for reproducibility (default: {DEFAULT_SEED})",
+    )
+    parser.add_argument(
+        "--headless",
+        action="store_true",
+        help="Force headless pygame mode (useful for servers/Colab)",
+    )
+    parser.add_argument(
+        "--max-episodes",
+        type=int,
+        default=None,
+        help="Optional override for training episodes (validation/debug)",
+    )
+    parser.add_argument(
+        "--max-steps",
+        type=int,
+        default=None,
+        help="Optional override for max steps per training episode (validation/debug)",
+    )
     args = parser.parse_args()
 
-    pygame.init()
+    set_global_seed(args.seed)
+    init_pygame(headless=args.headless)
     device = "cuda" if torch.cuda.is_available() else "cpu"
     print(f"[main] Using device: {device}")
 
-    env = CarRacingEnv()
+    env = CarRacingEnv(experiment_name="default", seed=args.seed)
     agent = TD3Agent(device=device)
 
+<<<<<<< HEAD
     checkpoint_path = None
     loaded_for_training = False
     if args.checkpoint:
@@ -159,10 +205,19 @@ def main():
         print("[main] Resuming training from the selected checkpoint.")
     if args.mode == "train" and args.resume and not loaded_for_training:
         print("[main] Resume requested, but no compatible checkpoint was found. Starting from scratch.")
+=======
+    checkpoint_path = _resolve_checkpoint(args.checkpoint)
+    if checkpoint_path and args.mode in {"eval", "demo"}:
+        agent.load(checkpoint_path)
+        print(f"[main] Loaded checkpoint: {checkpoint_path}")
+    elif args.mode in {"eval", "demo"}:
+        print("[main] No checkpoint found. Running evaluation/demo with current agent weights.")
+>>>>>>> dd7ca13774afbb2769a861a5c54b1c48e33d362d
 
     try:
         if args.mode == "train":
             print("[main] Starting training...")
+<<<<<<< HEAD
             train(env, agent)
         else:  # eval mode
             if args.mode == "demo":
@@ -179,6 +234,23 @@ def main():
             else:
                 print(f"[main] Starting evaluation ({args.eval_episodes} episodes)...")
                 evaluate(env, agent, num_episodes=args.eval_episodes, render=args.render)
+=======
+            train(
+                env,
+                agent,
+                experiment_name="default",
+                seed=args.seed,
+                max_episodes=args.max_episodes,
+                max_steps_per_episode=args.max_steps,
+            )
+        elif args.mode == "eval":
+            print(f"[main] Starting evaluation ({args.eval_episodes} episodes)...")
+            evaluate(env, agent, num_episodes=args.eval_episodes, render=args.render)
+        else:  # demo mode
+            demo_episodes = max(1, min(args.eval_episodes, 5))
+            print(f"[main] Starting demo ({demo_episodes} episodes, render enabled)...")
+            evaluate(env, agent, num_episodes=demo_episodes, render=True)
+>>>>>>> dd7ca13774afbb2769a861a5c54b1c48e33d362d
     except (KeyboardInterrupt, SystemExit):
         print("\n[main] Interrupted - shutting down gracefully.")
     finally:

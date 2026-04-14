@@ -5,6 +5,7 @@ Includes track loading, simple asset generation, and text helpers.
 """
 
 import os
+import random
 
 import numpy as np
 import pygame
@@ -121,3 +122,41 @@ def ensure_assets_exist():
         generate_track_image()
     if not os.path.exists(CAR_IMAGE_PATH):
         generate_car_image()
+
+
+def set_global_seed(seed: int):
+    """Set deterministic random seeds across Python, NumPy, and PyTorch."""
+    seed = int(seed)
+    random.seed(seed)
+    np.random.seed(seed)
+
+    try:
+        import torch
+
+        torch.manual_seed(seed)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed_all(seed)
+        torch.backends.cudnn.deterministic = True
+        torch.backends.cudnn.benchmark = False
+    except ImportError:
+        pass
+
+    print(f"[utils] Global seed set -> {seed}")
+
+
+def init_pygame(headless: bool = False):
+    """Initialize pygame with optional/automatic headless fallback."""
+    if headless:
+        os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
+    elif not os.environ.get("DISPLAY") and not os.environ.get("SDL_VIDEODRIVER"):
+        os.environ["SDL_VIDEODRIVER"] = "dummy"
+
+    try:
+        pygame.init()
+    except pygame.error as err:
+        if os.environ.get("SDL_VIDEODRIVER") != "dummy":
+            os.environ["SDL_VIDEODRIVER"] = "dummy"
+            pygame.init()
+            print("[utils] Pygame display fallback -> dummy")
+            return
+        raise RuntimeError(f"Failed to initialize pygame: {err}") from err

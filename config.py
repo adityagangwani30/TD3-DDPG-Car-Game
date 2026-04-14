@@ -76,6 +76,22 @@ SENSOR_NOISE_STD = 0.02  # Add Gaussian noise to sensor readings
 SENSOR_RAYCAST_STEP = 2  # Check every Nth pixel for speedup (approx 1% accuracy loss)
 
 # ---------------------------------------------------------------------------
+# Research experiments
+# ---------------------------------------------------------------------------
+EXPERIMENT_REWARD_MODES = ("basic", "shaped", "modified")
+EXPERIMENT_SENSOR_NOISE_LEVELS = (0.0, 0.02, 0.05)
+
+# Cartesian-product experiment grid used for reproducible research runs.
+EXPERIMENTS = {
+    f"{reward_mode}_noise_{noise_std:.2f}": {
+        "reward_mode": reward_mode,
+        "sensor_noise_std": noise_std,
+    }
+    for reward_mode in EXPERIMENT_REWARD_MODES
+    for noise_std in EXPERIMENT_SENSOR_NOISE_LEVELS
+}
+
+# ---------------------------------------------------------------------------
 # State / Action dimensions
 # ---------------------------------------------------------------------------
 # State: (x, y, speed, angle) + sensor_distances
@@ -131,6 +147,8 @@ BATCH_SIZE = 256
 # ---------------------------------------------------------------------------
 # Training
 # ---------------------------------------------------------------------------
+DEFAULT_SEED = 42
+EXPERIMENT_BASE_SEED = 1000
 MAX_EPISODES = 5000
 MAX_STEPS_PER_EPISODE = 2000
 TRAINING_START = 5000

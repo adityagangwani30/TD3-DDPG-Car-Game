@@ -17,14 +17,25 @@ from config import LOGS_DIR
 class MetricsTracker:
     """Tracks and logs training metrics to JSON Lines format."""
 
-    def __init__(self, log_dir: str = LOGS_DIR):
+    def __init__(
+        self,
+        log_dir: str = LOGS_DIR,
+        log_filename: str = "training_log.jsonl",
+        experiment_name: str = "default",
+        reward_mode: str | None = None,
+        sensor_noise_std: float | None = None,
+        seed: int | None = None,
+    ):
         self.log_dir = log_dir
         os.makedirs(log_dir, exist_ok=True)
-        self.log_file = os.path.join(log_dir, "training_log.jsonl")
+        self.log_file = os.path.join(log_dir, log_filename)
+        self.experiment_name = experiment_name
+        self.reward_mode = reward_mode
+        self.sensor_noise_std = sensor_noise_std
+        self.seed = seed
         
         # Current episode metrics
         self.episode_rewards = []
-        self.episode_lengths = []
         self.episode_speeds = []
         self.episode_steerings = []
         self.termination_counts = defaultdict(int)
@@ -39,9 +50,9 @@ class MetricsTracker:
     def reset_episode(self):
         """Reset metrics for a new episode."""
         self.episode_rewards = []
-        self.episode_lengths = []
         self.episode_speeds = []
         self.episode_steerings = []
+        self.termination_counts = defaultdict(int)
         self.laps_completed = 0
         self.collisions = 0
 
@@ -77,7 +88,17 @@ class MetricsTracker:
                 "episode": episode,
                 "reward_total": 0.0,
                 "reward_mean": 0.0,
+                "reward_std": 0.0,
                 "length": 0,
+                "speed_mean": 0.0,
+                "speed_max": 0.0,
+                "steering_smooth": 0.0,
+                "laps_completed": 0,
+                "collisions": 0,
+                "termination_reason": "unknown",
+                "critic_loss_mean": np.mean(self.critic_losses) if self.critic_losses else None,
+                "actor_loss_mean": np.mean(self.actor_losses) if self.actor_losses else None,
+                "buffer_size": self.buffer_sizes[-1] if self.buffer_sizes else 0,
             }
         
         total_reward = sum(self.episode_rewards)
@@ -101,6 +122,13 @@ class MetricsTracker:
 
     def log_episode(self, episode_summary: dict[str, Any]):
         """Log episode to file and compute rolling statistics."""
+        episode_summary = {
+            "experiment_name": self.experiment_name,
+            "reward_mode": self.reward_mode,
+            "sensor_noise_std": self.sensor_noise_std,
+            "seed": self.seed,
+            **episode_summary,
+        }
         with open(self.log_file, "a") as f:
             f.write(json.dumps(episode_summary) + "\n")
 

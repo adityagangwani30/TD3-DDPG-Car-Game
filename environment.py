@@ -13,12 +13,13 @@ import pygame
 
 from car import Car
 from config import (
+    CAR_MAX_SPEED,
     CAR_IMAGE_PATH,
     FINISH_LINE_WIDTH,
     FPS,
     HUD_BG_COLOR,
     HUD_TEXT_COLOR,
-    RENDER_DURING_TRAINING,
+    LOGS_DIR,
     REWARD_ALIVE,
     REWARD_CRASH,
     REWARD_LAP_COMPLETION,
@@ -40,7 +41,15 @@ from utils import draw_text, ensure_assets_exist, load_track_mask
 class CarRacingEnv:
     """Custom 2-D racing environment with a small Gym-like API."""
 
-    def __init__(self, enable_metrics: bool = True):
+    def __init__(
+        self,
+        enable_metrics: bool = True,
+        reward_mode: str = "shaped",
+        sensor_noise_std: float | None = None,
+        metrics_log_dir: str | None = None,
+        experiment_name: str = "default",
+        seed: int | None = None,
+    ):
         ensure_assets_exist()
 
         self.screen: pygame.Surface = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT))
@@ -53,9 +62,28 @@ class CarRacingEnv:
 
         car_img = pygame.image.load(CAR_IMAGE_PATH).convert_alpha()
         self.car = Car(self.track_mask, car_img)
+        if sensor_noise_std is not None:
+            self.set_sensor_noise(sensor_noise_std)
+
+        allowed_reward_modes = {"basic", "shaped", "modified"}
+        self.reward_mode = reward_mode if reward_mode in allowed_reward_modes else "shaped"
+        self.experiment_name = str(experiment_name)
+        self.seed = seed
+        self.sensor_noise_std = self.car.sensor_noise_std
 
         self.lap_timer = LapTimer()
-        self.metrics = MetricsTracker() if enable_metrics else None
+        resolved_log_dir = metrics_log_dir or LOGS_DIR
+        self.metrics = (
+            MetricsTracker(
+            log_dir=resolved_log_dir,
+                experiment_name=self.experiment_name,
+                reward_mode=self.reward_mode,
+                sensor_noise_std=self.sensor_noise_std,
+                seed=self.seed,
+            )
+            if enable_metrics
+            else None
+        )
 
         self.episode = 0
         self.step_count = 0
@@ -126,24 +154,57 @@ class CarRacingEnv:
         return steering, throttle
 
     def _compute_reward(self, steering: float, done: bool, lap_completed: bool) -> float:
-        """Improved reward function to avoid hacking."""
+        """Compute reward according to the configured reward mode."""
         if done:
             return REWARD_CRASH
 
-        reward = REWARD_ALIVE  # Small per-step bonus
+        if self.reward_mode == "basic":
+            # Basic reward: only survival bonus and crash penalty.
+            return REWARD_ALIVE
 
-        # Bonus for moving (encourages forward progress)
+        if self.reward_mode == "modified":
+            return self._compute_modified_reward(steering, lap_completed)
+
+        return self._compute_shaped_reward(steering, lap_completed)
+
+    def _compute_shaped_reward(self, steering: float, lap_completed: bool) -> float:
+        """Original shaped reward currently used by training."""
+        reward = REWARD_ALIVE
+
         if self.car.speed > STUCK_SPEED_THRESHOLD:
             reward += REWARD_SPEED_BONUS
 
-        # Big bonus for completing laps
         if lap_completed:
             reward += REWARD_LAP_COMPLETION
 
-        # Penalty for jerky steering (smooth movements)
         reward -= REWARD_STEERING_PENALTY * (abs(steering) ** 2)
 
         return reward
+
+    def _compute_modified_reward(self, steering: float, lap_completed: bool) -> float:
+        """Slightly enhanced shaped reward for experiment runs."""
+        reward = self._compute_shaped_reward(steering, lap_completed)
+
+        # Gentle speed-scaling encourages smoother acceleration.
+        reward += 0.05 * (self.car.speed / CAR_MAX_SPEED)
+
+        # Encourage straight, stable driving when moving.
+        if self.car.speed > STUCK_SPEED_THRESHOLD and abs(steering) < 0.2:
+            reward += 0.02
+
+        # Small anti-idling penalty to reduce stationary exploitation.
+        if self.car.speed <= STUCK_SPEED_THRESHOLD:
+            reward -= 0.02
+
+        return reward
+
+    def set_sensor_noise(self, noise_std: float):
+        """Update the car sensor noise level during runtime."""
+        self.car.set_sensor_noise(noise_std)
+        self.sensor_noise_std = self.car.sensor_noise_std
+
+        if hasattr(self, "metrics") and self.metrics:
+            self.metrics.sensor_noise_std = self.sensor_noise_std
 
     def _update_stuck_counter(self) -> bool:
         """Track how long the car has been almost stationary."""

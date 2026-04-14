@@ -37,7 +37,12 @@ from config import (
 class Car:
     """Top-down car with simple physics, speed-dependent steering, and raycasting sensors."""
 
-    def __init__(self, track_mask: np.ndarray, car_image: pygame.Surface):
+    def __init__(
+        self,
+        track_mask: np.ndarray,
+        car_image: pygame.Surface,
+        sensor_noise_std: float = SENSOR_NOISE_STD,
+    ):
         self.track_mask = track_mask
         self.original_image = car_image
 
@@ -45,6 +50,7 @@ class Car:
         self.y = CAR_START_Y
         self.angle = CAR_START_ANGLE
         self.speed = 0.0
+        self.sensor_noise_std = max(0.0, float(sensor_noise_std))
 
         self.sensor_dists: list[float] = [1.0] * NUM_SENSORS
         self.sensor_endpoints: list[tuple[float, float]] = []
@@ -83,11 +89,15 @@ class Car:
             # Normalize distance
             normalized_dist = dist / SENSOR_MAX_DIST
             # Add sensor noise
-            if SENSOR_NOISE_STD > 0:
-                noise = np.random.normal(0, SENSOR_NOISE_STD)
+            if self.sensor_noise_std > 0:
+                noise = np.random.normal(0, self.sensor_noise_std)
                 normalized_dist = np.clip(normalized_dist + noise, 0.0, 1.0)
             self.sensor_dists.append(normalized_dist)
             self.sensor_endpoints.append(endpoint)
+
+    def set_sensor_noise(self, sensor_noise_std: float):
+        """Update Gaussian sensor-noise standard deviation at runtime."""
+        self.sensor_noise_std = max(0.0, float(sensor_noise_std))
 
     def _cast_ray(self, angle_deg: float):
         """Cast a single ray from the car centre with ray-step optimization."""
