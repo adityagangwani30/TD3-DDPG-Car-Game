@@ -106,13 +106,7 @@ def train_with_config(
         episode_laps = 0
         episode_crashes = 0
         termination_reason = "max_steps"
-<<<<<<< HEAD
-        # Keep the old behavior locally: show the visual window during training.
-        # If rendering is disabled in config, this stays off for headless/fast runs.
-        render_enabled = RENDER_DURING_TRAINING
-=======
         render_enabled = _should_render_episode(episode) and RENDER_DURING_TRAINING
->>>>>>> dd7ca13774afbb2769a861a5c54b1c48e33d362d
 
         for step in range(1, steps_per_episode + 1):
             # Use decaying exploration noise

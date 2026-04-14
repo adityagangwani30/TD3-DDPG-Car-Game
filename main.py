@@ -13,7 +13,6 @@ Examples:
 
 import argparse
 import os
-<<<<<<< HEAD
 import sys
 from pathlib import Path
 
@@ -25,8 +24,6 @@ if HEADLESS:
     os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
     os.environ.setdefault("SDL_AUDIODRIVER", "dummy")
 
-=======
->>>>>>> dd7ca13774afbb2769a861a5c54b1c48e33d362d
 import pygame
 import torch
 
@@ -35,25 +32,6 @@ from environment import CarRacingEnv
 from td3_agent import TD3Agent
 from train import train, evaluate
 from utils import init_pygame, set_global_seed
-
-
-def _resolve_checkpoint(requested: str | None) -> str | None:
-    """Resolve checkpoint path with sensible defaults for eval/demo runs."""
-    if requested:
-        if os.path.exists(requested):
-            return requested
-        print(f"[main] Checkpoint not found: {requested}")
-        return None
-
-    candidates = [
-        os.path.join("models", "td3_best_avg100.pth"),
-        os.path.join("models", "td3_best.pth"),
-    ]
-    for path in candidates:
-        if os.path.exists(path):
-            return path
-    return None
-
 
 def _find_default_checkpoint() -> str | None:
     """Return the best available checkpoint, if one exists."""
@@ -176,7 +154,6 @@ def main():
     env = CarRacingEnv(experiment_name="default", seed=args.seed)
     agent = TD3Agent(device=device)
 
-<<<<<<< HEAD
     checkpoint_path = None
     loaded_for_training = False
     if args.checkpoint:
@@ -205,36 +182,10 @@ def main():
         print("[main] Resuming training from the selected checkpoint.")
     if args.mode == "train" and args.resume and not loaded_for_training:
         print("[main] Resume requested, but no compatible checkpoint was found. Starting from scratch.")
-=======
-    checkpoint_path = _resolve_checkpoint(args.checkpoint)
-    if checkpoint_path and args.mode in {"eval", "demo"}:
-        agent.load(checkpoint_path)
-        print(f"[main] Loaded checkpoint: {checkpoint_path}")
-    elif args.mode in {"eval", "demo"}:
-        print("[main] No checkpoint found. Running evaluation/demo with current agent weights.")
->>>>>>> dd7ca13774afbb2769a861a5c54b1c48e33d362d
 
     try:
         if args.mode == "train":
             print("[main] Starting training...")
-<<<<<<< HEAD
-            train(env, agent)
-        else:  # eval mode
-            if args.mode == "demo":
-                print(f"[main] Starting quick demo ({args.demo_episodes} episodes)...")
-                preview_path = str(Path("logs") / "demo_preview.png")
-                evaluate(
-                    env,
-                    agent,
-                    num_episodes=args.demo_episodes,
-                    render=True,
-                    preview_path=preview_path,
-                )
-                print(f"[main] Demo preview saved to: {preview_path}")
-            else:
-                print(f"[main] Starting evaluation ({args.eval_episodes} episodes)...")
-                evaluate(env, agent, num_episodes=args.eval_episodes, render=args.render)
-=======
             train(
                 env,
                 agent,
@@ -247,10 +198,17 @@ def main():
             print(f"[main] Starting evaluation ({args.eval_episodes} episodes)...")
             evaluate(env, agent, num_episodes=args.eval_episodes, render=args.render)
         else:  # demo mode
-            demo_episodes = max(1, min(args.eval_episodes, 5))
+            demo_episodes = max(1, min(args.demo_episodes, 5))
             print(f"[main] Starting demo ({demo_episodes} episodes, render enabled)...")
-            evaluate(env, agent, num_episodes=demo_episodes, render=True)
->>>>>>> dd7ca13774afbb2769a861a5c54b1c48e33d362d
+            preview_path = str(Path("logs") / "demo_preview.png")
+            evaluate(
+                env,
+                agent,
+                num_episodes=demo_episodes,
+                render=True,
+                preview_path=preview_path,
+            )
+            print(f"[main] Demo preview saved to: {preview_path}")
     except (KeyboardInterrupt, SystemExit):
         print("\n[main] Interrupted - shutting down gracefully.")
     finally:

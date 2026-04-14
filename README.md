@@ -1,4 +1,3 @@
-<<<<<<< HEAD
 # TD3 Self-Driving Car
 
 A beginner-friendly reinforcement learning project that trains an autonomous car to drive around a simple oval track using **TD3** (Twin Delayed Deep Deterministic Policy Gradient), **PyTorch**, and **Pygame**.
@@ -232,7 +231,6 @@ venv\Scripts\activate
 ```
 
 ### 3. Install dependencies
-=======
 # TD3 Self-Driving Car for Research on Reward Design and Sensor Robustness
 
 This repository presents a reinforcement learning framework for autonomous driving on a 2-D racing track using **Twin Delayed Deep Deterministic Policy Gradient (TD3)**. The project is designed to be beginner-friendly for implementation and reproducible enough for research reporting.
@@ -318,13 +316,11 @@ Action vector (`2` continuous values):
 - Throttle in `[0, 1]`
 
 ## Installation
->>>>>>> dd7ca13774afbb2769a861a5c54b1c48e33d362d
 
 ```bash
 pip install -r requirements.txt
 ```
 
-<<<<<<< HEAD
 ### 4. Run the project once
 
 The first run will generate the track and car assets automatically if they are missing.
@@ -351,7 +347,6 @@ python eval_models.py --episodes 10
 
 ### Plot training metrics
 
-=======
 ## Quick Start
 
 Train:
@@ -365,12 +360,10 @@ python main.py --mode eval --eval-episodes 10
 ```
 
 Demo playback:
->>>>>>> dd7ca13774afbb2769a861a5c54b1c48e33d362d
 ```bash
 python main.py --mode demo --eval-episodes 3
 ```
 
-<<<<<<< HEAD
 ## 📈 Results / Observations
 
 Because this is a basic RL project, results depend on random seeds, training duration, and reward tuning. In general, a successful run should show:
@@ -430,7 +423,6 @@ No explicit license file is included in the repository at the moment. If you pla
 - The code is intentionally kept beginner-friendly rather than highly optimized.
 - Assets are generated automatically when missing.
 - Training is easier to inspect if rendering is disabled during long runs.
-=======
 Headless execution (server/Colab):
 ```bash
 python main.py --mode train --headless
@@ -533,4 +525,3 @@ MIT License.
 - TD3 core logic is intentionally modular and isolated from environment code.
 - Assets are auto-generated when missing.
 - The repository is suitable for both learning-oriented implementation and experimental reporting workflows.
->>>>>>> dd7ca13774afbb2769a861a5c54b1c48e33d362d
