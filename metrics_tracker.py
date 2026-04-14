@@ -17,10 +17,10 @@ from config import LOGS_DIR
 class MetricsTracker:
     """Tracks and logs training metrics to JSON Lines format."""
 
-    def __init__(self, log_dir: str = LOGS_DIR):
+    def __init__(self, log_dir: str = LOGS_DIR, log_filename: str = "training_log.jsonl"):
         self.log_dir = log_dir
         os.makedirs(log_dir, exist_ok=True)
-        self.log_file = os.path.join(log_dir, "training_log.jsonl")
+        self.log_file = os.path.join(log_dir, log_filename)
         
         # Current episode metrics
         self.episode_rewards = []

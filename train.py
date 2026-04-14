@@ -37,9 +37,23 @@ def _should_render_episode(episode: int) -> bool:
 
 def train(env: CarRacingEnv, agent: TD3Agent):
     """Run the main training loop with exploration decay and metrics tracking."""
+    return train_with_config(env, agent)
+
+
+def train_with_config(
+    env: CarRacingEnv,
+    agent: TD3Agent,
+    model_dir: str | None = None,
+    run_label: str | None = None,
+):
+    """Run training with optional custom output directory and run label."""
     replay_buffer = ReplayBuffer(BUFFER_CAPACITY)
     metrics = env.metrics or MetricsTracker()
-    os.makedirs(MODEL_DIR, exist_ok=True)
+    target_model_dir = model_dir or MODEL_DIR
+    os.makedirs(target_model_dir, exist_ok=True)
+
+    prefix = f"[{run_label}] " if run_label else ""
+    print(f"{prefix}[train] Starting training loop. Models -> {target_model_dir}")
 
     best_reward = -float("inf")
     best_reward_per_100 = -float("inf")
@@ -85,26 +99,28 @@ def train(env: CarRacingEnv, agent: TD3Agent):
         metrics.log_episode(episode_summary)
 
         # Print summary
+        if run_label:
+            print(f"[{run_label}] ", end="")
         metrics.print_summary(episode, episode_summary, avg_reward_100)
 
         # Save best model by individual episode reward
         if episode_reward > best_reward:
             best_reward = episode_reward
-            agent.save(os.path.join(MODEL_DIR, "td3_best.pth"))
+            agent.save(os.path.join(target_model_dir, "td3_best.pth"))
 
         # Save best model by rolling 100-episode average
         if avg_reward_100 > best_reward_per_100:
             best_reward_per_100 = avg_reward_100
-            agent.save(os.path.join(MODEL_DIR, "td3_best_avg100.pth"))
+            agent.save(os.path.join(target_model_dir, "td3_best_avg100.pth"))
 
         # Periodic checkpoint
         if episode % SAVE_MODEL_EVERY == 0:
-            agent.save(os.path.join(MODEL_DIR, f"td3_ep{episode}.pth"))
+            agent.save(os.path.join(target_model_dir, f"td3_ep{episode}.pth"))
 
-    print("\n[train] Training complete.")
-    print(f"[train] Best episode reward: {best_reward:.2f}")
-    print(f"[train] Best 100-episode average: {best_reward_per_100:.2f}")
-    print(f"[train] Models saved to: {MODEL_DIR}")
+    print(f"\n{prefix}[train] Training complete.")
+    print(f"{prefix}[train] Best episode reward: {best_reward:.2f}")
+    print(f"{prefix}[train] Best 100-episode average: {best_reward_per_100:.2f}")
+    print(f"{prefix}[train] Models saved to: {target_model_dir}")
     env.close()
 
 

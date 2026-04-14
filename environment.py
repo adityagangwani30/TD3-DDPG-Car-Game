@@ -46,6 +46,7 @@ class CarRacingEnv:
         enable_metrics: bool = True,
         reward_mode: str = "shaped",
         sensor_noise_std: float | None = None,
+        metrics_log_dir: str | None = None,
     ):
         ensure_assets_exist()
 
@@ -66,7 +67,7 @@ class CarRacingEnv:
         self.reward_mode = reward_mode if reward_mode in allowed_reward_modes else "shaped"
 
         self.lap_timer = LapTimer()
-        self.metrics = MetricsTracker() if enable_metrics else None
+        self.metrics = MetricsTracker(log_dir=metrics_log_dir) if enable_metrics else None
 
         self.episode = 0
         self.step_count = 0
