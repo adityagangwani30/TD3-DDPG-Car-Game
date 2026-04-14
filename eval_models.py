@@ -46,8 +46,10 @@ def main():
     )
     args = parser.parse_args()
 
+    mode_str = "HEADLESS (off-screen)" if args.headless else "GUI (interactive)"
     init_pygame(headless=args.headless)
     device = "cuda" if torch.cuda.is_available() else "cpu"
+    print(f"\n[eval] Visualization: {mode_str}")
     print(f"[eval] Using device: {device}\n")
 
     # Find model files
@@ -77,7 +79,7 @@ def main():
         print(f"Evaluating: {model_file.name}")
         print(f"{'='*60}")
         
-        env = CarRacingEnv(enable_metrics=False)
+        env = CarRacingEnv(enable_metrics=False, headless=args.headless)
         agent = TD3Agent(device=device)
         
         try:

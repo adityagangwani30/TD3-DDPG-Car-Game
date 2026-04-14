@@ -190,6 +190,7 @@ def evaluate(env: CarRacingEnv, agent: TD3Agent, num_episodes: int = 10,
         num_episodes: Number of evaluation episodes
         render: Whether to render the episodes
         checkpoint_path: Path to load checkpoint from (optional)
+        preview_path: Path to save a preview frame (works in both GUI and headless modes)
     
     Returns:
         Dictionary with evaluation statistics
@@ -227,9 +228,9 @@ def evaluate(env: CarRacingEnv, agent: TD3Agent, num_episodes: int = 10,
 
             if render:
                 env.render(enabled=True, limit_fps=True)
+                # Save preview frame (works in both GUI and headless modes)
                 if preview_path and not preview_saved:
-                    os.makedirs(os.path.dirname(preview_path), exist_ok=True)
-                    pygame.image.save(env.screen, preview_path)
+                    env.save_frame(preview_path)
                     preview_saved = True
 
         results["total_rewards"].append(episode_reward)

@@ -82,6 +82,7 @@ def run_all_experiments(
             metrics_log_dir=exp_log_dir,
             experiment_name=experiment_name,
             seed=seed,
+            headless=headless,
         )
 
         agent = TD3Agent(device=device)

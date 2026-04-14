@@ -8,6 +8,8 @@ Simplified environment logic:
   - Integrated metrics tracking
 """
 
+import os
+
 import numpy as np
 import pygame
 
@@ -49,18 +51,36 @@ class CarRacingEnv:
         metrics_log_dir: str | None = None,
         experiment_name: str = "default",
         seed: int | None = None,
+        headless: bool = False,
     ):
         ensure_assets_exist()
 
-        self.screen: pygame.Surface = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT))
-        pygame.display.set_caption(WINDOW_TITLE)
+        self.headless = headless
+        
+        if headless:
+            # Create off-screen surface for headless mode
+            self.screen = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT))
+        else:
+            # Create interactive window for GUI mode
+            self.screen: pygame.Surface = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT))
+            pygame.display.set_caption(WINDOW_TITLE)
+        
         self.clock = pygame.time.Clock()
         self.font = pygame.font.SysFont("consolas", 16)
 
-        self.track_surface = pygame.image.load(TRACK_IMAGE_PATH).convert()
+        # Load and convert track surface
+        self.track_surface = pygame.image.load(TRACK_IMAGE_PATH)
+        if not headless:
+            # Use .convert() for better performance in GUI mode
+            self.track_surface = self.track_surface.convert()
         self.track_mask = load_track_mask(self.track_surface)
 
-        car_img = pygame.image.load(CAR_IMAGE_PATH).convert_alpha()
+        # Load car image
+        car_img = pygame.image.load(CAR_IMAGE_PATH)
+        if not headless:
+            # Use .convert_alpha() for better performance in GUI mode
+            car_img = car_img.convert_alpha()
+        
         self.car = Car(self.track_mask, car_img)
         if sensor_noise_std is not None:
             self.set_sensor_noise(sensor_noise_std)
@@ -215,23 +235,49 @@ class CarRacingEnv:
         return self.stuck_steps >= STUCK_STEP_LIMIT
 
     def render(self, enabled: bool = True, limit_fps: bool = False):
-        """Draw the current frame. Event handling always stays active."""
-        for event in pygame.event.get():
-            if event.type == pygame.QUIT:
-                pygame.quit()
-                raise SystemExit
+        """
+        Draw the current frame.
+        
+        Args:
+            enabled: If False, skip rendering entirely.
+            limit_fps: If True and enabled, cap frame rate to FPS.
+        
+        In headless mode: Renders to off-screen surface only.
+        In GUI mode: Handles events and displays window.
+        """
+        # Handle GUI events only in non-headless mode
+        if not self.headless:
+            for event in pygame.event.get():
+                if event.type == pygame.QUIT:
+                    pygame.quit()
+                    raise SystemExit
 
         if not enabled:
             return
 
+        # Render the frame to the surface (works in both modes)
         self.screen.blit(self.track_surface, (0, 0))
         self._draw_finish_line()
         self.car.draw(self.screen)
         self._draw_hud()
 
-        pygame.display.flip()
+        # Update display only in GUI mode
+        if not self.headless:
+            pygame.display.flip()
+        
         if limit_fps:
             self.clock.tick(FPS)
+
+    def save_frame(self, output_path: str):
+        """
+        Save the current rendered frame to a PNG file.
+        
+        Args:
+            output_path: Path where to save the PNG image.
+        """
+        os.makedirs(os.path.dirname(output_path), exist_ok=True)
+        pygame.image.save(self.screen, output_path)
+        print(f"[env] Frame saved -> {output_path}")
 
     def _draw_finish_line(self):
         """Draw the finish line across the track."""

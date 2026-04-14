@@ -16,9 +16,10 @@ import os
 import sys
 from pathlib import Path
 
-HEADLESS = bool(os.environ.get("COLAB_RELEASE_TAG")) or (
-    sys.platform.startswith("linux") and not os.environ.get("DISPLAY")
-)
+from utils import detect_headless_environment
+
+# Detect headless environment BEFORE pygame import
+HEADLESS = detect_headless_environment()
 
 if HEADLESS:
     os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
@@ -146,12 +147,25 @@ def main():
     )
     args = parser.parse_args()
 
+    # Use auto-detected headless mode unless explicitly overridden
+    effective_headless = args.headless or HEADLESS
+    
     set_global_seed(args.seed)
-    init_pygame(headless=args.headless)
+    init_pygame(headless=effective_headless)
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    print(f"[main] Using device: {device}")
+    
+    # Print initialization information
+    mode_str = "HEADLESS (off-screen rendering)" if effective_headless else "GUI (interactive window)"
+    print(f"\n{'='*70}")
+    print(f"[main] Visualization: {mode_str}")
+    print(f"[main] Device: {device}")
+    print(f"{'='*70}\n")
 
-    env = CarRacingEnv(experiment_name="default", seed=args.seed)
+    env = CarRacingEnv(
+        experiment_name="default",
+        seed=args.seed,
+        headless=effective_headless
+    )
     agent = TD3Agent(device=device)
 
     checkpoint_path = None
