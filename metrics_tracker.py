@@ -17,10 +17,22 @@ from config import LOGS_DIR
 class MetricsTracker:
     """Tracks and logs training metrics to JSON Lines format."""
 
-    def __init__(self, log_dir: str = LOGS_DIR, log_filename: str = "training_log.jsonl"):
+    def __init__(
+        self,
+        log_dir: str = LOGS_DIR,
+        log_filename: str = "training_log.jsonl",
+        experiment_name: str = "default",
+        reward_mode: str | None = None,
+        sensor_noise_std: float | None = None,
+        seed: int | None = None,
+    ):
         self.log_dir = log_dir
         os.makedirs(log_dir, exist_ok=True)
         self.log_file = os.path.join(log_dir, log_filename)
+        self.experiment_name = experiment_name
+        self.reward_mode = reward_mode
+        self.sensor_noise_std = sensor_noise_std
+        self.seed = seed
         
         # Current episode metrics
         self.episode_rewards = []
@@ -101,6 +113,13 @@ class MetricsTracker:
 
     def log_episode(self, episode_summary: dict[str, Any]):
         """Log episode to file and compute rolling statistics."""
+        episode_summary = {
+            "experiment_name": self.experiment_name,
+            "reward_mode": self.reward_mode,
+            "sensor_noise_std": self.sensor_noise_std,
+            "seed": self.seed,
+            **episode_summary,
+        }
         with open(self.log_file, "a") as f:
             f.write(json.dumps(episode_summary) + "\n")
 

@@ -14,9 +14,11 @@ import argparse
 import pygame
 import torch
 
+from config import DEFAULT_SEED
 from environment import CarRacingEnv
 from td3_agent import TD3Agent
 from train import train, evaluate
+from utils import set_global_seed
 
 
 def main():
@@ -48,13 +50,20 @@ def main():
         default=True,
         help="Render evaluation episodes"
     )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=DEFAULT_SEED,
+        help=f"Random seed for reproducibility (default: {DEFAULT_SEED})",
+    )
     args = parser.parse_args()
 
+    set_global_seed(args.seed)
     pygame.init()
     device = "cuda" if torch.cuda.is_available() else "cpu"
     print(f"[main] Using device: {device}")
 
-    env = CarRacingEnv()
+    env = CarRacingEnv(experiment_name="default", seed=args.seed)
     agent = TD3Agent(device=device)
 
     if args.checkpoint:
@@ -64,7 +73,7 @@ def main():
     try:
         if args.mode == "train":
             print("[main] Starting training...")
-            train(env, agent)
+            train(env, agent, experiment_name="default", seed=args.seed)
         else:  # eval mode
             print(f"[main] Starting evaluation ({args.eval_episodes} episodes)...")
             evaluate(env, agent, num_episodes=args.eval_episodes, render=args.render)

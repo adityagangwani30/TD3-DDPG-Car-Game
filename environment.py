@@ -47,6 +47,8 @@ class CarRacingEnv:
         reward_mode: str = "shaped",
         sensor_noise_std: float | None = None,
         metrics_log_dir: str | None = None,
+        experiment_name: str = "default",
+        seed: int | None = None,
     ):
         ensure_assets_exist()
 
@@ -65,9 +67,22 @@ class CarRacingEnv:
 
         allowed_reward_modes = {"basic", "shaped", "modified"}
         self.reward_mode = reward_mode if reward_mode in allowed_reward_modes else "shaped"
+        self.experiment_name = str(experiment_name)
+        self.seed = seed
+        self.sensor_noise_std = self.car.sensor_noise_std
 
         self.lap_timer = LapTimer()
-        self.metrics = MetricsTracker(log_dir=metrics_log_dir) if enable_metrics else None
+        self.metrics = (
+            MetricsTracker(
+                log_dir=metrics_log_dir,
+                experiment_name=self.experiment_name,
+                reward_mode=self.reward_mode,
+                sensor_noise_std=self.sensor_noise_std,
+                seed=self.seed,
+            )
+            if enable_metrics
+            else None
+        )
 
         self.episode = 0
         self.step_count = 0
@@ -185,6 +200,10 @@ class CarRacingEnv:
     def set_sensor_noise(self, noise_std: float):
         """Update the car sensor noise level during runtime."""
         self.car.set_sensor_noise(noise_std)
+        self.sensor_noise_std = self.car.sensor_noise_std
+
+        if hasattr(self, "metrics") and self.metrics:
+            self.metrics.sensor_noise_std = self.sensor_noise_std
 
     def _update_stuck_counter(self) -> bool:
         """Track how long the car has been almost stationary."""

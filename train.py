@@ -12,6 +12,7 @@ import numpy as np
 from config import (
     BATCH_SIZE,
     BUFFER_CAPACITY,
+    DEFAULT_SEED,
     EXPLORATION_NOISE,
     EXPLORATION_NOISE_DECAY,
     MAX_EPISODES,
@@ -26,6 +27,7 @@ from environment import CarRacingEnv
 from metrics_tracker import MetricsTracker
 from replay_buffer import ReplayBuffer
 from td3_agent import TD3Agent
+from utils import set_global_seed
 
 
 def _should_render_episode(episode: int) -> bool:
@@ -35,9 +37,14 @@ def _should_render_episode(episode: int) -> bool:
     return episode == 1 or episode % RENDER_EVERY_EPISODES == 0
 
 
-def train(env: CarRacingEnv, agent: TD3Agent):
+def train(
+    env: CarRacingEnv,
+    agent: TD3Agent,
+    experiment_name: str = "default",
+    seed: int | None = None,
+):
     """Run the main training loop with exploration decay and metrics tracking."""
-    return train_with_config(env, agent)
+    return train_with_config(env, agent, experiment_name=experiment_name, seed=seed)
 
 
 def train_with_config(
@@ -45,15 +52,26 @@ def train_with_config(
     agent: TD3Agent,
     model_dir: str | None = None,
     run_label: str | None = None,
+    experiment_name: str = "default",
+    seed: int | None = None,
 ):
     """Run training with optional custom output directory and run label."""
+    resolved_seed = DEFAULT_SEED if seed is None else int(seed)
+    set_global_seed(resolved_seed)
+
     replay_buffer = ReplayBuffer(BUFFER_CAPACITY)
     metrics = env.metrics or MetricsTracker()
     target_model_dir = model_dir or MODEL_DIR
     os.makedirs(target_model_dir, exist_ok=True)
 
     prefix = f"[{run_label}] " if run_label else ""
+    print(
+        f"{prefix}[train] Experiment: {experiment_name} | "
+        f"Reward mode: {env.reward_mode} | Sensor noise: {env.sensor_noise_std:.3f} | Seed: {resolved_seed}"
+    )
     print(f"{prefix}[train] Starting training loop. Models -> {target_model_dir}")
+
+    model_prefix = f"{experiment_name}_" if experiment_name and experiment_name != "default" else ""
 
     best_reward = -float("inf")
     best_reward_per_100 = -float("inf")
@@ -106,16 +124,16 @@ def train_with_config(
         # Save best model by individual episode reward
         if episode_reward > best_reward:
             best_reward = episode_reward
-            agent.save(os.path.join(target_model_dir, "td3_best.pth"))
+            agent.save(os.path.join(target_model_dir, f"{model_prefix}td3_best.pth"))
 
         # Save best model by rolling 100-episode average
         if avg_reward_100 > best_reward_per_100:
             best_reward_per_100 = avg_reward_100
-            agent.save(os.path.join(target_model_dir, "td3_best_avg100.pth"))
+            agent.save(os.path.join(target_model_dir, f"{model_prefix}td3_best_avg100.pth"))
 
         # Periodic checkpoint
         if episode % SAVE_MODEL_EVERY == 0:
-            agent.save(os.path.join(target_model_dir, f"td3_ep{episode}.pth"))
+            agent.save(os.path.join(target_model_dir, f"{model_prefix}td3_ep{episode}.pth"))
 
     print(f"\n{prefix}[train] Training complete.")
     print(f"{prefix}[train] Best episode reward: {best_reward:.2f}")

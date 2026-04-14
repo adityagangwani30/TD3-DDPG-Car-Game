@@ -12,6 +12,7 @@ import pygame
 import torch
 
 from config import (
+    EXPERIMENT_BASE_SEED,
     EXPERIMENTS,
     EXPERIMENT_REWARD_MODES,
     EXPERIMENT_SENSOR_NOISE_LEVELS,
@@ -21,6 +22,7 @@ from config import (
 from environment import CarRacingEnv
 from td3_agent import TD3Agent
 from train import train_with_config
+from utils import set_global_seed
 
 
 def _experiment_tag(reward_mode: str, sensor_noise_std: float) -> str:
@@ -42,6 +44,7 @@ def run_all_experiments():
     for index, (experiment_name, cfg) in enumerate(experiments, start=1):
         reward_mode = cfg["reward_mode"]
         sensor_noise_std = cfg["sensor_noise_std"]
+        seed = EXPERIMENT_BASE_SEED + index - 1
         tag = _experiment_tag(reward_mode, sensor_noise_std)
 
         exp_log_dir = os.path.join(LOGS_DIR, tag)
@@ -53,16 +56,20 @@ def run_all_experiments():
         print(f"Experiment {index}/{len(experiments)}: {experiment_name} ({tag})")
         print(f"  reward_mode      : {reward_mode}")
         print(f"  sensor_noise_std : {sensor_noise_std}")
+        print(f"  seed             : {seed}")
         print(f"  logs             : {exp_log_dir}")
         print(f"  models           : {exp_model_dir}")
         print("-" * 72)
 
+        set_global_seed(seed)
         pygame.init()
         env = CarRacingEnv(
             enable_metrics=True,
             reward_mode=reward_mode,
             sensor_noise_std=sensor_noise_std,
             metrics_log_dir=exp_log_dir,
+            experiment_name=experiment_name,
+            seed=seed,
         )
         # Explicit runtime updates keep the runner robust if environment defaults change.
         env.reward_mode = reward_mode
@@ -76,6 +83,8 @@ def run_all_experiments():
                 agent,
                 model_dir=exp_model_dir,
                 run_label=f"{tag} {index}/{len(experiments)}",
+                experiment_name=experiment_name,
+                seed=seed,
             )
         except (KeyboardInterrupt, SystemExit):
             print("\n[experiments] Interrupted by user. Stopping remaining runs.")
