@@ -38,10 +38,12 @@ def run_all_experiments(
     headless: bool = False,
     max_episodes: int | None = None,
     max_steps: int | None = None,
+    start_index: int = 0,
 ):
     """Run all configured experiments sequentially with isolated outputs."""
     device = "cuda" if torch.cuda.is_available() else "cpu"
     experiments = list(EXPERIMENTS.items())
+    experiments = experiments[start_index:]
     if max_experiments is not None:
         experiments = experiments[: max(0, max_experiments)]
 
@@ -118,6 +120,12 @@ if __name__ == "__main__":
         help="Run only the first N experiments (for validation/debug)",
     )
     parser.add_argument(
+        "--start-index",
+        type=int,
+        default=0,
+        help="Start from this experiment index (0-based) for batched runs",
+    )
+    parser.add_argument(
         "--headless",
         action="store_true",
         help="Force headless pygame mode",
@@ -140,4 +148,5 @@ if __name__ == "__main__":
         headless=cli_args.headless,
         max_episodes=cli_args.max_episodes,
         max_steps=cli_args.max_steps,
+        start_index=cli_args.start_index,
     )
