@@ -1,135 +1,209 @@
-# TD3 Self-Driving Car
-# TD3 Self-Driving Car - Enhanced Edition
+# TD3 Self-Driving Car for Research on Reward Design and Sensor Robustness
 
-A reinforcement learning project where a car learns to drive around an oval track using TD3 (Twin Delayed DDPG), PyTorch, and Pygame.
+This repository presents a reinforcement learning framework for autonomous driving on a 2-D racing track using **Twin Delayed Deep Deterministic Policy Gradient (TD3)**. The project is designed to be beginner-friendly for implementation and reproducible enough for research reporting.
 
-## 🚀 What's New?
+The core focus is adaptive decision-making under changing reward formulations and sensor uncertainty. The codebase supports structured experiments, per-experiment logging, model isolation, and plotting for comparative analysis.
 
-This enhanced version includes major improvements:
-- ✅ **Improved Reward Function** - Lap completion bonuses, reduced crash penalty, smoother steering incentives
-- ✅ **Speed-Dependent Steering** - Realistic turning behavior (turn less at high speed)
-- ✅ **Sensor Noise** - More realistic and robust sensor readings
-- ✅ **Exploration Noise Decay** - Automatic reduction of exploration over episodes
-- ✅ **Gradient Clipping** - Stable training with bounded gradients
-- ✅ **Comprehensive Metrics** - Real-time tracking of training progress
-- ✅ **Evaluation Mode** - Test trained agents without exploration noise
-- ✅ **Model Comparison** - Evaluate multiple checkpoints
-- ✅ **Visualization** - Plot training metrics and progress
-- ✅ **Difficulty Settings** - Easy/normal/hard modes for future expansion
-- ✅ **Reduced Complexity** - Simplified sensor count (5→3), network size (128→64)
+## Project Description
 
-## 📋 Project Structure
+The agent observes vehicle state and ray-based distance sensors, and outputs continuous steering/throttle actions. Training is based on TD3 with replay buffers, delayed policy updates, target smoothing, and gradient clipping.
+
+Key characteristics:
+- Continuous control with TD3 (actor-critic)
+- Multiple reward modes for ablation studies
+- Sensor-noise injection for robustness analysis
+- Reproducibility controls via deterministic seeding
+- Structured experiment runner with isolated outputs
+
+## Research Objective
+
+This project studies how **reward shaping** and **sensor noise** affect policy learning quality, safety, and stability in an autonomous-driving task.
+
+Primary questions:
+- How much does reward design impact convergence speed and driving quality?
+- How robust is TD3 performance under progressively noisier sensor readings?
+- Which reward-noise combinations provide the best trade-off between reward, crash rate, and lap completion?
+
+## Experiment Setup
+
+Experiments are configured in `config.py` through a grid of reward modes and sensor-noise levels.
+
+Reward modes:
+- `basic`: alive bonus + crash penalty (minimal shaping)
+- `shaped`: progress-oriented shaping with movement/lap incentives
+- `modified`: enhanced shaped reward with additional stability bias
+
+Sensor noise levels:
+- `0.00`
+- `0.02`
+- `0.05`
+
+Total combinations:
+- 3 reward modes x 3 noise levels = **9 experiments**
+
+Each experiment runs with:
+- Unique experiment identifier
+- Dedicated model directory
+- Dedicated log directory
+- Independent seed configuration
+
+## Project Structure
 
 ```text
-td3-car-game/
-├── main.py                  # Entry point (train or eval)
-├── config.py                # All hyperparameters and settings
-├── car.py                   # Car physics, sensors, raycasting
-├── environment.py           # RL environment, rewards, rendering
-├── lap_timer.py             # Lap timing and finish line detection
-├── td3_agent.py             # TD3 agent, actor, critic networks
-├── replay_buffer.py         # Experience replay buffer
-├── train.py                 # Training loop and evaluation function
-├── metrics_tracker.py       # Comprehensive metrics tracking
-├── plot_metrics.py          # Visualization of training progress
-├── eval_models.py           # Model comparison and evaluation
-├── utils.py                 # Asset generation and helpers
+TD3-Car-Game/
+├── main.py                  # Main CLI entry: train / eval / demo
+├── run_experiments.py       # Sequential research experiment runner
+├── config.py                # Global configuration, experiments, hyperparameters
+├── environment.py           # RL environment, reward modes, runtime noise control
+├── car.py                   # Vehicle dynamics and sensor simulation
+├── td3_agent.py             # TD3 actor/critic implementation
+├── replay_buffer.py         # Off-policy replay memory
+├── train.py                 # Training/evaluation loops and checkpoint logic
+├── metrics_tracker.py       # Per-episode metrics logging (JSONL)
+├── plot_metrics.py          # Per-experiment and cross-experiment plotting
+├── eval_models.py           # Evaluate and compare trained checkpoints
+├── lap_timer.py             # Lap timing and finish-line crossing detection
+├── utils.py                 # Seeding, asset generation, pygame initialization
 ├── requirements.txt         # Python dependencies
-└── assets/, models/, logs/  # Generated during runtime
+├── assets/                  # Generated/loaded sprites and track assets
+├── logs/                    # Experiment logs (JSONL + plots)
+└── models/                  # Saved checkpoints (experiment-specific folders)
 ```
 
-## 🎮 Observation & Action Spaces
+## Observation and Action Spaces
 
-**State (9 dimensions)**
-- Position: (x, y) normalized to [0, 1]
-- Speed: normalized to [0, 1] (max = 8.0)
-- Angle: normalized to [0, 1]
-- **3 sensors**: front-left, front, front-right with noise
+State vector (`4 + NUM_SENSORS`):
+- Normalized position `(x, y)`
+- Normalized speed
+- Normalized heading angle
+- Sensor distances (normalized ray distances)
 
-**Action (2 continuous)**
-- Steering: [-1, 1] with speed-dependent turning
-- Throttle: [0, 1] (forward motion only)
+Action vector (`2` continuous values):
+- Steering in `[-1, 1]`
+- Throttle in `[0, 1]`
 
-## 💾 Installation
+## Installation
 
 ```bash
 pip install -r requirements.txt
 ```
 
-## 🎯 Quick Start
+## Quick Start
 
-### Train
+Train:
 ```bash
-python main.py
-
-## Evaluate
-```bash
-python main.py --mode eval --checkpoint models/td3_best.pth
+python main.py --mode train
 ```
 
-## Compare Models
+Evaluate:
 ```bash
-python eval_models.py --episodes 20
+python main.py --mode eval --eval-episodes 10
 ```
 
-## Plot Metrics
+Demo playback:
 ```bash
-python plot_metrics.py
+python main.py --mode demo --eval-episodes 3
 ```
 
-## 🔧 Configuration
-
-Edit `config.py` to tune:
-- Training parameters (episodes, batch size, learning rates)
-- Physics (speed, friction, steering)
-- Rewards (bonuses and penalties)
-- Sensors (noise, angles, count)
-- Rendering (enable/disable for speed)
-
-## 📊 Training Progress
-
-Metrics logged to `logs/training_log.jsonl` include:
-- Episode reward and moving average
-- Crashes, laps completed, lap times
-- Speed statistics and steering smoothness
-- Network losses and buffer utilization
-
-Monitor training with:
+Headless execution (server/Colab):
 ```bash
-python plot_metrics.py  # Generate plots
-tail -f logs/training_log.jsonl  # Watch live
+python main.py --mode train --headless
 ```
 
-## 🐛 Troubleshooting
+## How to Run Experiments
 
-**Slow training**: Set `RENDER_DURING_TRAINING = False` in config
+Run all configured experiments sequentially:
+```bash
+python run_experiments.py
+```
 
-**Agent doesn't learn**: Check `TRAINING_START`, `BATCH_SIZE`, and reward function
+Headless experiment sweep:
+```bash
+python run_experiments.py --headless
+```
 
-**Frequent crashes**: Reduce `CAR_MAX_SPEED` or increase steering penalty
+Validation run (short, partial):
+```bash
+python run_experiments.py --max-experiments 2 --max-episodes 1 --max-steps 10 --headless
+```
 
-## 📚 Key Concepts
+Outputs are isolated by experiment tag (example: `R2_N3`):
+- Logs: `logs/R2_N3/training_log.jsonl`
+- Models: `models/R2_N3/*.pth`
 
-- **TD3**: Twin Delayed DDPG for off-policy continuous control
-- **Replay Buffer**: Store and sample past experiences
-- **Target Networks**: Separate networks for stable learning
-- **Exploration Decay**: Gradually reduce randomness during training
+## Results and Evaluation
 
-## 🎬 Expected Progress
+### Metrics Logged
 
-| Episode | Avg Reward | Laps | Crashes | Status |
-|---------|-----------|------|---------|--------|
-| 100     | ~0        | 0    | 90%     | Random |
-| 500     | 20-50     | 1-2  | 50%     | Learning |
-| 1500    | 100-130   | 8-10 | 20%     | Good |
-| 2500+   | 150+      | 12+  | <10%    | Excellent |
+Each episode logs research-relevant metrics including:
+- `reward_total`
+- `reward_rolling_avg_100`
+- `collisions` (crashes)
+- `laps_completed`
+- `length` (episode steps)
+- experiment metadata (`experiment_name`, `reward_mode`, `sensor_noise_std`, `seed`)
 
-## 📝 License
+### Plotting and Comparison
 
-MIT - Use freely for learning!
+Generate plots for individual experiments and comparisons:
+```bash
+python plot_metrics.py --log-dir logs --compare
+```
+
+Or target selected experiments:
+```bash
+python plot_metrics.py --log-dir logs --experiments R1_N1 R2_N1 R3_N1 --compare
+```
+
+Generated figures include:
+- Reward vs Episodes
+- Crash Rate vs Episodes
+- Laps vs Episodes
+- Cross-experiment comparison plots
+
+Expected trends (typical):
+- Reward increases with training (after early exploration)
+- Crash rate decreases as policy stabilizes
+- Laps completed increase as trajectory control improves
+- Higher sensor noise generally reduces stability unless reward shaping is robust
+
+## Configuration Notes
+
+Important config groups in `config.py`:
+- Training budget and optimization hyperparameters
+- Reward constants and reward mode definitions
+- Sensor layout and noise controls
+- Experiment grid (`EXPERIMENTS`)
+- Reproducibility defaults (`DEFAULT_SEED`, `EXPERIMENT_BASE_SEED`)
+
+## Troubleshooting
+
+Slow training:
+- Disable frequent rendering via `RENDER_DURING_TRAINING = False`
+
+No display environment:
+- Use `--headless` in `main.py`, `run_experiments.py`, or `eval_models.py`
+
+Evaluation checkpoint issues:
+- Pass `--checkpoint path/to/model.pth` explicitly
+- Or place default checkpoints in `models/`
+
+## Future Work
+
+Research-aligned extensions:
+- Domain randomization (track geometry and friction variation)
+- Curriculum learning across increasing noise/difficulty schedules
+- Multi-sensor fusion beyond sparse ray casting
+- Statistical significance testing across repeated seeds
+- Sim-to-real inspired robustness benchmarks and perturbation suites
+- Extended baselines (e.g., SAC/PPO) for comparative studies
+
+## License
+
+MIT License.
 
 ## Notes
 
-- The TD3 core logic is standard and intentionally kept separate from the environment logic.
-- Assets are generated automatically if they are missing.
-- Best and last lap times persist across episode resets for display.
+- TD3 core logic is intentionally modular and isolated from environment code.
+- Assets are auto-generated when missing.
+- The repository is suitable for both learning-oriented implementation and experimental reporting workflows.
