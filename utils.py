@@ -142,3 +142,21 @@ def set_global_seed(seed: int):
         pass
 
     print(f"[utils] Global seed set -> {seed}")
+
+
+def init_pygame(headless: bool = False):
+    """Initialize pygame with optional/automatic headless fallback."""
+    if headless:
+        os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
+    elif not os.environ.get("DISPLAY") and not os.environ.get("SDL_VIDEODRIVER"):
+        os.environ["SDL_VIDEODRIVER"] = "dummy"
+
+    try:
+        pygame.init()
+    except pygame.error as err:
+        if os.environ.get("SDL_VIDEODRIVER") != "dummy":
+            os.environ["SDL_VIDEODRIVER"] = "dummy"
+            pygame.init()
+            print("[utils] Pygame display fallback -> dummy")
+            return
+        raise RuntimeError(f"Failed to initialize pygame: {err}") from err

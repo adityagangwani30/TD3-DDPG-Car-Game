@@ -6,6 +6,7 @@ Runs all experiment combinations from config.EXPERIMENTS and keeps outputs isola
   - Models: models/R{reward_idx}_N{noise_idx}/
 """
 
+import argparse
 import os
 
 import pygame
@@ -22,7 +23,7 @@ from config import (
 from environment import CarRacingEnv
 from td3_agent import TD3Agent
 from train import train_with_config
-from utils import set_global_seed
+from utils import init_pygame, set_global_seed
 
 
 def _experiment_tag(reward_mode: str, sensor_noise_std: float) -> str:
@@ -32,10 +33,21 @@ def _experiment_tag(reward_mode: str, sensor_noise_std: float) -> str:
     return f"R{reward_idx}_N{noise_idx}"
 
 
-def run_all_experiments():
+def run_all_experiments(
+    max_experiments: int | None = None,
+    headless: bool = False,
+    max_episodes: int | None = None,
+    max_steps: int | None = None,
+):
     """Run all configured experiments sequentially with isolated outputs."""
     device = "cuda" if torch.cuda.is_available() else "cpu"
     experiments = list(EXPERIMENTS.items())
+    if max_experiments is not None:
+        experiments = experiments[: max(0, max_experiments)]
+
+    if not experiments:
+        print("[experiments] No experiments selected. Nothing to run.")
+        return
 
     print("=" * 72)
     print(f"Running {len(experiments)} experiments sequentially on device: {device}")
@@ -62,7 +74,7 @@ def run_all_experiments():
         print("-" * 72)
 
         set_global_seed(seed)
-        pygame.init()
+        init_pygame(headless=headless)
         env = CarRacingEnv(
             enable_metrics=True,
             reward_mode=reward_mode,
@@ -71,9 +83,6 @@ def run_all_experiments():
             experiment_name=experiment_name,
             seed=seed,
         )
-        # Explicit runtime updates keep the runner robust if environment defaults change.
-        env.reward_mode = reward_mode
-        env.set_sensor_noise(sensor_noise_std)
 
         agent = TD3Agent(device=device)
 
@@ -85,6 +94,8 @@ def run_all_experiments():
                 run_label=f"{tag} {index}/{len(experiments)}",
                 experiment_name=experiment_name,
                 seed=seed,
+                max_episodes=max_episodes,
+                max_steps_per_episode=max_steps,
             )
         except (KeyboardInterrupt, SystemExit):
             print("\n[experiments] Interrupted by user. Stopping remaining runs.")
@@ -98,4 +109,34 @@ def run_all_experiments():
 
 
 if __name__ == "__main__":
-    run_all_experiments()
+    parser = argparse.ArgumentParser(description="Run TD3 experiments sequentially")
+    parser.add_argument(
+        "--max-experiments",
+        type=int,
+        default=None,
+        help="Run only the first N experiments (for validation/debug)",
+    )
+    parser.add_argument(
+        "--headless",
+        action="store_true",
+        help="Force headless pygame mode",
+    )
+    parser.add_argument(
+        "--max-episodes",
+        type=int,
+        default=None,
+        help="Optional override for training episodes per experiment",
+    )
+    parser.add_argument(
+        "--max-steps",
+        type=int,
+        default=None,
+        help="Optional override for max steps per episode",
+    )
+    cli_args = parser.parse_args()
+    run_all_experiments(
+        max_experiments=cli_args.max_experiments,
+        headless=cli_args.headless,
+        max_episodes=cli_args.max_episodes,
+        max_steps=cli_args.max_steps,
+    )

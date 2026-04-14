@@ -15,6 +15,7 @@ from config import MODEL_DIR
 from environment import CarRacingEnv
 from td3_agent import TD3Agent
 from train import evaluate
+from utils import init_pygame
 
 
 def main():
@@ -38,16 +39,20 @@ def main():
         default=True,
         help="Render evaluation"
     )
+    parser.add_argument(
+        "--headless",
+        action="store_true",
+        help="Force headless pygame mode",
+    )
     args = parser.parse_args()
 
-    pygame.init()
+    init_pygame(headless=args.headless)
     device = "cuda" if torch.cuda.is_available() else "cpu"
     print(f"[eval] Using device: {device}\n")
 
     # Find model files
     if "*" in args.model or "?" in args.model:
         # Pattern matching
-        from pathlib import Path
         pattern = args.model
         model_files = list(Path(MODEL_DIR).glob(pattern))
     else:

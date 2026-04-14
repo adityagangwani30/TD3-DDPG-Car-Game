@@ -36,7 +36,6 @@ class MetricsTracker:
         
         # Current episode metrics
         self.episode_rewards = []
-        self.episode_lengths = []
         self.episode_speeds = []
         self.episode_steerings = []
         self.termination_counts = defaultdict(int)
@@ -51,7 +50,6 @@ class MetricsTracker:
     def reset_episode(self):
         """Reset metrics for a new episode."""
         self.episode_rewards = []
-        self.episode_lengths = []
         self.episode_speeds = []
         self.episode_steerings = []
         self.termination_counts = defaultdict(int)

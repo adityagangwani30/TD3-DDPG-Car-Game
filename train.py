@@ -42,9 +42,18 @@ def train(
     agent: TD3Agent,
     experiment_name: str = "default",
     seed: int | None = None,
+    max_episodes: int | None = None,
+    max_steps_per_episode: int | None = None,
 ):
     """Run the main training loop with exploration decay and metrics tracking."""
-    return train_with_config(env, agent, experiment_name=experiment_name, seed=seed)
+    return train_with_config(
+        env,
+        agent,
+        experiment_name=experiment_name,
+        seed=seed,
+        max_episodes=max_episodes,
+        max_steps_per_episode=max_steps_per_episode,
+    )
 
 
 def train_with_config(
@@ -54,6 +63,8 @@ def train_with_config(
     run_label: str | None = None,
     experiment_name: str = "default",
     seed: int | None = None,
+    max_episodes: int | None = None,
+    max_steps_per_episode: int | None = None,
 ):
     """Run training with optional custom output directory and run label."""
     resolved_seed = DEFAULT_SEED if seed is None else int(seed)
@@ -77,24 +88,34 @@ def train_with_config(
     print(f"{prefix}[train] Starting training loop. Models -> {target_model_dir}")
 
     model_prefix = f"{experiment_name}_" if experiment_name and experiment_name != "default" else ""
+    total_episodes = max_episodes if max_episodes is not None else MAX_EPISODES
+    steps_per_episode = (
+        max_steps_per_episode if max_steps_per_episode is not None else MAX_STEPS_PER_EPISODE
+    )
 
     best_reward = -float("inf")
     best_reward_per_100 = -float("inf")
     reward_history = []
     exploration_noise = EXPLORATION_NOISE
 
-    for episode in range(1, MAX_EPISODES + 1):
+    for episode in range(1, total_episodes + 1):
         state = env.reset()
         episode_reward = 0.0
+        episode_length = 0
+        episode_laps = 0
+        episode_crashes = 0
         termination_reason = "max_steps"
-        render_enabled = _should_render_episode(episode) and not RENDER_DURING_TRAINING
+        render_enabled = _should_render_episode(episode) and RENDER_DURING_TRAINING
 
-        for step in range(1, MAX_STEPS_PER_EPISODE + 1):
+        for step in range(1, steps_per_episode + 1):
             # Use decaying exploration noise
             action = agent.select_action(state, add_noise=True, noise_scale=exploration_noise)
 
             next_state, reward, done, info = env.step(action)
             episode_reward += reward
+            episode_length += 1
+            if info.get("lap_completed", False):
+                episode_laps += 1
 
             replay_buffer.add(state, action, reward, next_state, done)
 
@@ -105,7 +126,9 @@ def train_with_config(
             state = next_state
 
             if done:
-                termination_reason = info["termination_reason"]
+                termination_reason = info.get("termination_reason", "unknown")
+                if termination_reason == "off_track":
+                    episode_crashes = 1
                 break
 
         # Decay exploration noise
@@ -117,6 +140,12 @@ def train_with_config(
 
         # Compute episode summary for metrics
         episode_summary = metrics.get_episode_summary(episode)
+        # Keep core paper/report metrics consistent even if env.metrics is disabled.
+        episode_summary["reward_total"] = float(episode_reward)
+        episode_summary["length"] = int(episode_length)
+        episode_summary["laps_completed"] = int(episode_laps)
+        episode_summary["collisions"] = int(episode_crashes)
+        episode_summary["termination_reason"] = termination_reason
         episode_summary["reward_rolling_avg_100"] = float(avg_reward_100)
         episode_summary["exploration_noise"] = exploration_noise
         episode_summary["replay_buffer_size"] = len(replay_buffer)

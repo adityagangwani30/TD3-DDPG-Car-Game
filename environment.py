@@ -19,7 +19,7 @@ from config import (
     FPS,
     HUD_BG_COLOR,
     HUD_TEXT_COLOR,
-    RENDER_DURING_TRAINING,
+    LOGS_DIR,
     REWARD_ALIVE,
     REWARD_CRASH,
     REWARD_LAP_COMPLETION,
@@ -72,9 +72,10 @@ class CarRacingEnv:
         self.sensor_noise_std = self.car.sensor_noise_std
 
         self.lap_timer = LapTimer()
+        resolved_log_dir = metrics_log_dir or LOGS_DIR
         self.metrics = (
             MetricsTracker(
-                log_dir=metrics_log_dir,
+            log_dir=resolved_log_dir,
                 experiment_name=self.experiment_name,
                 reward_mode=self.reward_mode,
                 sensor_noise_std=self.sensor_noise_std,
