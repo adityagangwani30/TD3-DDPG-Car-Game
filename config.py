@@ -78,7 +78,7 @@ SENSOR_RAYCAST_STEP = 2  # Check every Nth pixel for speedup (approx 1% accuracy
 # ---------------------------------------------------------------------------
 # Research experiments
 # ---------------------------------------------------------------------------
-EXPERIMENT_REWARD_MODES = ("basic", "shaped", "modified")
+EXPERIMENT_REWARD_MODES = ("basic", "shaped", "modified", "tuned")
 EXPERIMENT_SENSOR_NOISE_LEVELS = (0.0, 0.02, 0.05)
 
 # Cartesian-product experiment grid used for reproducible research runs.
@@ -90,6 +90,10 @@ EXPERIMENTS = {
     for reward_mode in EXPERIMENT_REWARD_MODES
     for noise_std in EXPERIMENT_SENSOR_NOISE_LEVELS
 }
+
+# Debug: Verify experiment count
+_EXPERIMENT_COUNT_DEBUG = len(EXPERIMENTS)
+assert _EXPERIMENT_COUNT_DEBUG == 12, f"Expected 12 experiments (4 modes × 3 noise levels), got {_EXPERIMENT_COUNT_DEBUG}"
 
 # ---------------------------------------------------------------------------
 # State / Action dimensions

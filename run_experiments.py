@@ -52,6 +52,7 @@ def run_all_experiments(
         return
 
     print("=" * 72)
+    print(f"Total experiments available: {len(EXPERIMENTS)}")
     print(f"Running {len(experiments)} experiments sequentially on device: {device}")
     print("=" * 72)
 

@@ -85,7 +85,7 @@ class CarRacingEnv:
         if sensor_noise_std is not None:
             self.set_sensor_noise(sensor_noise_std)
 
-        allowed_reward_modes = {"basic", "shaped", "modified"}
+        allowed_reward_modes = {"basic", "shaped", "modified", "tuned"}
         self.reward_mode = reward_mode if reward_mode in allowed_reward_modes else "shaped"
         self.experiment_name = str(experiment_name)
         self.seed = seed
@@ -185,6 +185,9 @@ class CarRacingEnv:
         if self.reward_mode == "modified":
             return self._compute_modified_reward(steering, lap_completed)
 
+        if self.reward_mode == "tuned":
+            return self._compute_tuned_reward(steering, lap_completed)
+
         return self._compute_shaped_reward(steering, lap_completed)
 
     def _compute_shaped_reward(self, steering: float, lap_completed: bool) -> float:
@@ -202,19 +205,69 @@ class CarRacingEnv:
         return reward
 
     def _compute_modified_reward(self, steering: float, lap_completed: bool) -> float:
-        """Slightly enhanced shaped reward for experiment runs."""
-        reward = self._compute_shaped_reward(steering, lap_completed)
+        """Enhanced shaped reward for experiment runs (R3).
+        
+        Improvements over shaped reward:
+        - Higher speed bonus (0.18 vs 0.15)
+        - Higher lap completion bonus (16.0 vs 15.0)
+        - Reduced steering penalty (0.04 vs 0.05)
+        - Enhanced stability bonuses
+        """
+        # Base shaped reward with tuned coefficients
+        reward = REWARD_ALIVE
+
+        if self.car.speed > STUCK_SPEED_THRESHOLD:
+            reward += 0.18  # Increased from 0.15
+
+        if lap_completed:
+            reward += 16.0  # Increased from 15.0
+
+        reward -= 0.04 * (abs(steering) ** 2)  # Reduced from 0.05
 
         # Gentle speed-scaling encourages smoother acceleration.
-        reward += 0.05 * (self.car.speed / CAR_MAX_SPEED)
+        reward += 0.06 * (self.car.speed / CAR_MAX_SPEED)  # Increased from 0.05
 
         # Encourage straight, stable driving when moving.
         if self.car.speed > STUCK_SPEED_THRESHOLD and abs(steering) < 0.2:
-            reward += 0.02
+            reward += 0.03  # Increased from 0.02
 
         # Small anti-idling penalty to reduce stationary exploitation.
         if self.car.speed <= STUCK_SPEED_THRESHOLD:
             reward -= 0.02
+
+        return reward
+
+    def _compute_tuned_reward(self, steering: float, lap_completed: bool) -> float:
+        """Strongly shaped reward for optimal learning (R4).
+        
+        Strong reward shaping:
+        - Higher alive reward (0.08 vs 0.05)
+        - Much higher speed bonus (0.25 vs 0.15)
+        - Much higher lap completion bonus (18.0 vs 15.0)
+        - Much lower steering penalty (0.03 vs 0.05)
+        - Enhanced stability and movement bonuses
+        """
+        # Strong base reward
+        reward = 0.08  # Higher alive reward
+
+        if self.car.speed > STUCK_SPEED_THRESHOLD:
+            reward += 0.25  # Much higher speed bonus
+
+        if lap_completed:
+            reward += 18.0  # Much higher lap completion bonus
+
+        reward -= 0.03 * (abs(steering) ** 2)  # Much lower steering penalty
+
+        # Strong speed-scaling encourages aggressive acceleration.
+        reward += 0.10 * (self.car.speed / CAR_MAX_SPEED)  # Higher scaling
+
+        # Strong encouragement for straight, stable driving when moving.
+        if self.car.speed > STUCK_SPEED_THRESHOLD and abs(steering) < 0.2:
+            reward += 0.05  # Higher stability bonus
+
+        # Strong penalty for idling to encourage continuous movement.
+        if self.car.speed <= STUCK_SPEED_THRESHOLD:
+            reward -= 0.04  # Stronger penalty
 
         return reward
 
