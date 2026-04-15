@@ -47,7 +47,6 @@ HUD_BG_COLOR = (0, 0, 0, 160)
 HUD_TEXT_COLOR = (255, 255, 255)
 SENSOR_COLOR = (0, 255, 255)
 SENSOR_ENDPOINT_COLOR = (255, 50, 50)
-FINISH_LINE_COLOR = (245, 245, 245)
 FINISH_LINE_STRIPE_COLOR = (30, 30, 30)
 
 # ---------------------------------------------------------------------------
@@ -91,9 +90,9 @@ EXPERIMENTS = {
     for noise_std in EXPERIMENT_SENSOR_NOISE_LEVELS
 }
 
-# Debug: Verify experiment count
-_EXPERIMENT_COUNT_DEBUG = len(EXPERIMENTS)
-assert _EXPERIMENT_COUNT_DEBUG == 12, f"Expected 12 experiments (4 modes × 3 noise levels), got {_EXPERIMENT_COUNT_DEBUG}"
+assert len(EXPERIMENTS) == 12, (
+    f"Expected 12 experiments (4 modes × 3 noise levels), got {len(EXPERIMENTS)}"
+)
 
 # ---------------------------------------------------------------------------
 # State / Action dimensions
@@ -138,10 +137,6 @@ HIDDEN_DIM_2 = 64  # Reduced from 128
 # Gradient clipping
 GRADIENT_CLIP_MAX_NORM = 1.0
 
-# Reward normalization
-NORMALIZE_REWARDS = True
-REWARD_NORM_UPDATE_FREQ = 100  # Update normalization stats every N episodes
-
 # ---------------------------------------------------------------------------
 # Replay buffer
 # ---------------------------------------------------------------------------
@@ -158,29 +153,3 @@ MAX_STEPS_PER_EPISODE = 2000
 TRAINING_START = 5000
 SAVE_MODEL_EVERY = 100
 RENDER_EVERY_EPISODES = 25
-
-# ---------------------------------------------------------------------------
-# Difficulty Levels (for future expansion)
-# ---------------------------------------------------------------------------
-DIFFICULTY = "normal"  # "easy", "normal", "hard"
-
-DIFFICULTY_SETTINGS = {
-    "easy": {
-        "track_width": 100,  # Wider track
-        "sensor_noise": 0.01,
-        "friction": 0.02,
-        "car_max_speed": 6.0,
-    },
-    "normal": {
-        "track_width": 50,  # Standard
-        "sensor_noise": 0.02,
-        "friction": 0.05,
-        "car_max_speed": 8.0,
-    },
-    "hard": {
-        "track_width": 30,  # Narrow track
-        "sensor_noise": 0.05,
-        "friction": 0.10,
-        "car_max_speed": 10.0,
-    },
-}

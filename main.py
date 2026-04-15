@@ -13,7 +13,6 @@ Examples:
 
 import argparse
 import os
-import sys
 from pathlib import Path
 
 from utils import detect_headless_environment

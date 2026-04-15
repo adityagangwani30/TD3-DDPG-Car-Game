@@ -19,6 +19,7 @@
 - [How to Run](#how-to-run)
 - [Experiment Setup](#experiment-setup)
 - [Results & Metrics](#results--metrics)
+- [Results & Insights](#results--insights)
 - [Visualization](#visualization)
 - [Project Structure](#project-structure)
 - [Configuration](#configuration)
@@ -67,23 +68,27 @@ This repository balances **educational clarity** with **research rigor**:
 This project investigates how two factors influence TD3 learning in continuous control tasks:
 
 1. **Reward Shaping**: How does reward design impact convergence speed, policy quality, and stability?
+   - Comparison across 4 reward modes: basic, shaped, modified (improved), and tuned (optimized)
 2. **Sensor Robustness**: How does sensor noise affect learning success and final policy performance?
+   - Testing 3 noise levels: clean (0.0), moderate (0.02), high (0.05)
 
 ### Hypotheses
 
 - Well-designed reward functions should accelerate convergence and improve final policy quality
 - Sensor noise degrades performance, but robust rewards can mitigate this degradation
+- The "tuned" reward mode (R4) should outperform baseline modes due to stronger shaping
 - The interaction between reward mode and noise level is non-trivial and worth studying empirically
 
 ---
 
 ## Key Contributions
 
-1. **Multi-mode Reward System**: Three distinct reward formulations (basic, shaped, modified) for systematic ablation studies
+1. **Multi-mode Reward System**: Four distinct reward formulations (basic, shaped, modified, tuned) for systematic ablation studies
 2. **Sensor Noise Framework**: Configurable Gaussian noise injection for robustness analysis
-3. **Reproducible Experiments**: Deterministic seeding and isolated experiment directories for clean comparative analysis
-4. **Complete Metrics Suite**: Episode rewards, crash rates, lap times, steering smoothness, and phase-space analysis
+3. **Reproducible Experiments**: Deterministic seeding and isolated experiment directories (12 total configurations)
+4. **Complete Metrics Suite**: Episode rewards, crash rates, lap times, steering smoothness, and comparative analysis
 5. **Modular Codebase**: Clear separation between environment, agent, training, and evaluation logic
+6. **Research-Grade Notebook**: Colab-compatible end-to-end workflow for running all experiments and generating comparative plots
 
 ---
 
@@ -143,51 +148,90 @@ Action = [steering, throttle]
 
 ### 4. Reward Function
 
-The reward function drives all learning. We implement **three modes** for ablation studies:
+The reward function drives all learning. We implement **four modes** to study reward design impact:
 
-#### Mode 1: Basic Reward (Minimal Shaping)
-
-```
-R_basic = +1.0 per step (survival bonus)
-        - 10.0 if off-track
-        - 5.0 if collision / stuck
-        + 50.0 for lap completion
-        - 0.01 * |steering| (steering penalty)
-```
-
-**Pros**: Simple, easy to understand  
-**Cons**: Often leads to reward hacking or poor driving (e.g., driving in circles)
-
-#### Mode 2: Shaped Reward (Recommended)
+#### Mode 1: Basic Reward (Baseline)
 
 ```
-R_shaped = +1.0 per step (survival bonus)
-         + 0.5 * speed (reward forward motion)
-         + 1.0 * (progress_made) (reward lap progress)
-         - 10.0 if off-track
-         - 5.0 if collision / stuck
-         + 100.0 for lap completion
-         - 0.02 * |steering| (steering penalty)
+R_basic = +0.05 per step (survival bonus)
+        + 0.15 * speed_bonus (if moving)
+        + 15.0 for lap completion
+        - 5.0 if off-track
+        - 0.05 * |steering|² (steering penalty)
 ```
 
-**Design rationale**:
-- Encourages consistent forward motion (avoids stuck loops)
-- Rewards incremental lap progress (guidance signal)
-- Heavy lap bonus incentivizes goal completion
-- Steering penalty promotes smooth, efficient control
+**Purpose**: Minimal shaping baseline for comparison  
+**Characteristics**: Simple, prone to local optima
 
-**Pros**: Better-shaped exploration signal  
-**Cons**: More hyperparameters to tune
-
-#### Mode 3: Modified Reward (Enhanced Shaping)
+#### Mode 2: Shaped Reward (Standard)
 
 ```
-R_modified = R_shaped + adaptive_noise_bonus
+R_shaped = R_basic + enhanced_guidance
 ```
 
-Adds robustness-aware shaping to encourage policies that are more resilient to sensor uncertainty.
+- Consistent survival bonus
+- Speed bonus for forward motion (discourages stuck episodes)
+- Lap completion bonus  
+- Steering penalty for jerky control
 
-**Design rationale**: When sensor noise is high, the agent should learn smoother, less reactive policies
+**Purpose**: Well-balanced reward with good guidance signals  
+**Characteristics**: Good starting point for RL training
+
+#### Mode 3: Modified Reward (Improved - R3)
+
+```
+R_modified = +0.05 alive_reward (same as basic)
+           + 0.18 speed_bonus (increased from 0.15)
+           + 16.0 lap_completion (increased from 15.0)
+           + 0.06 speed_scaling (increased from 0.05)
+           + 0.03 stability_bonus (increased from 0.02, for straight driving)
+           - anti_idle_penalty
+           - 0.04 * |steering|² (reduced penalty for more exploration)
+```
+
+**Improvements over shaped**:
+- Higher speed incentive (0.18 vs 0.15) → encourages aggressive acceleration
+- Higher lap bonus (16.0 vs 15.0) → stronger completion incentive
+- Lower steering penalty (0.04 vs 0.05) → allows more dynamic control
+- Enhanced stability bonuses → rewards smooth, consistent driving
+
+**Purpose**: Optimized reward balancing performance and stability  
+**Characteristics**: Better convergence, improved lap completion rates
+
+#### Mode 4: Tuned Reward (Optimized - R4) ⭐ NEW
+
+```
+R_tuned = +0.08 alive_reward (increased from 0.05)
+        + 0.25 speed_bonus (increased from 0.15)
+        + 18.0 lap_completion (increased from 15.0)
+        + 0.10 speed_scaling (increased from 0.05)
+        + 0.05 stability_bonus (increased from 0.02)
+        - 0.04 anti_idle_penalty (stronger than modified)
+        - 0.03 * |steering|² (reduced penalty for more exploration)
+```
+
+**Improvements over modified**:
+- Much higher alive reward (0.08) → stronger survival incentive
+- Much higher speed bonus (0.25) → aggressive reward for movement
+- Much higher lap bonus (18.0) → strongest completion incentive
+- Much stronger stability bonuses → rewards smooth, consistent racing
+- Lower steering penalty (0.03) → encourages bolder control
+- Strong anti-idle penalties → prevents stuck episodes
+
+**Purpose**: Aggressive reward for **faster convergence and stronger robustness**  
+**Characteristics**: Fastest learning, best final performance on clean tasks  
+**Note**: This is the recommended mode for most applications
+
+#### Comparative Summary
+
+| Aspect | Basic | Shaped | Modified | Tuned |
+|--------|-------|--------|----------|-------|
+| Convergence | Slow | Medium | Fast | Fastest |
+| Stability | Low | Medium | High | High |
+| Exploration | Low | Medium | Medium | High |
+| Robustness | Poor | Good | Better | Best |
+
+
 
 ### 5. TD3 Algorithm (High-Level)
 
@@ -264,42 +308,46 @@ The first execution will auto-generate assets (track and car sprites):
 python main.py --mode demo
 ```
 
-If assets are created successfully, you should see:
-```
-✓ Assets exist in: ./assets/
-```
-
 ---
 
 ## Quick Start
 
-### Try the Demo (2-3 minutes)
+#### Try the Demo (2-3 minutes)
 
 ```bash
 python main.py --mode demo
 ```
 
-Runs 3 evaluation episodes using a pre-trained checkpoint (if available). Perfect for verifying installation.
+Runs 2 demo episodes by default. Perfect for verifying installation.
 
-### Train from Scratch (30 minutes to several hours)
-
-```bash
-python main.py --mode train
-```
-
-Trains a new agent. By default:
-- Uses **shaped reward mode**
-- Runs for **100 episodes**
-- Renders the environment in real-time (set `RENDER_DURING_TRAINING = False` in config.py for faster training)
-- Saves checkpoints every 10 episodes
-
-### Evaluate a Checkpoint
+#### Train a Single Experiment (120 episodes)
 
 ```bash
-python main.py --mode eval --checkpoint models/td3_best.pth --eval-episodes 10
+# Train using the default environment setup
+python main.py --mode train --max-episodes 120 --headless
 ```
 
-Runs 10 evaluation episodes (no learning) and reports metrics.
+This runs exactly 120 episodes using the default environment settings
+(`reward_mode=shaped`, `sensor_noise_std=0.02`).
+
+For grid-defined experiment variants (R1-R4, N1-N3), use:
+
+```bash
+python run_experiments.py --max-episodes 120 --headless
+```
+
+#### Run All 12 Experiments via Colab (Recommended)
+
+Use the provided notebook for a structured, batch-based workflow:
+[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/adityagangwani30/TD3-Car-Game/blob/main/colab_demo.ipynb)
+
+The notebook automatically handles:
+- Cloning & setup
+- Running all 12 experiments (4 modes × 3 noise levels) ← 1,440 total episodes
+- Generating comparison plots
+- Downloading results
+
+Total runtime: 2-4 hours on Colab GPU
 
 ---
 
@@ -337,11 +385,11 @@ python main.py --mode eval --headless --eval-episodes 10
 ### Demo Commands
 
 ```bash
-# Quick demo (3 episodes)
+# Quick demo (2 episodes by default)
 python main.py --mode demo
 
-# Extended demo (10 episodes)
-python main.py --mode demo --eval-episodes 10
+# Extended demo (max supported is 5 episodes)
+python main.py --mode demo --demo-episodes 5
 
 # Demo in headless mode
 python main.py --mode demo --headless
@@ -362,120 +410,248 @@ The notebook automatically:
 
 ## Experiment Setup
 
-### Structured Ablation Studies
+### Full Experiment Grid
 
-The project supports **systematic experimentation** via `run_experiments.py`. This enables fair comparison of different reward modes and sensor noise levels.
+We study **12 experiments** via systematic grid search:
 
-### Experiment Grid
+**Factors**:
+- **Reward modes** (4): basic (R1), shaped (R2), modified (R3), tuned (R4)
+- **Sensor noise levels** (3): clean (N1: 0.0), moderate (N2: 0.02), high (N3: 0.05)
 
-We study 9 configurations (3 reward modes × 3 noise levels):
+**Total combinations**: 4 × 3 = **12 experiments**
 
-| Reward Mode | Noise Level | Experiment ID |
-|-------------|-------------|---------------|
-| basic | 0.00 | `basic_noise_0.00` |
-| basic | 0.02 | `basic_noise_0.02` |
-| basic | 0.05 | `basic_noise_0.05` |
-| shaped | 0.00 | `shaped_noise_0.00` |
-| shaped | 0.02 | `shaped_noise_0.02` |
-| shaped | 0.05 | `shaped_noise_0.05` |
-| modified | 0.00 | `modified_noise_0.00` |
-| modified | 0.02 | `modified_noise_0.02` |
-| modified | 0.05 | `modified_noise_0.05` |
+#### Experiment Grid
 
-#### Sensor Noise Mechanism
+| # | ID | Reward Mode | Noise Level | Episodes |
+|----|---|----|-----|----------|
+| 1 | `basic_noise_0.00` | basic (R1) | 0.0 (N1) | 120 |
+| 2 | `basic_noise_0.02` | basic (R1) | 0.02 (N2) | 120 |
+| 3 | `basic_noise_0.05` | basic (R1) | 0.05 (N3) | 120 |
+| 4 | `shaped_noise_0.00` | shaped (R2) | 0.0 (N1) | 120 |
+| 5 | `shaped_noise_0.02` | shaped (R2) | 0.02 (N2) | 120 |
+| 6 | `shaped_noise_0.05` | shaped (R2) | 0.05 (N3) | 120 |
+| 7 | `modified_noise_0.00` | modified (R3) | 0.0 (N1) | 120 |
+| 8 | `modified_noise_0.02` | modified (R3) | 0.02 (N2) | 120 |
+| 9 | `modified_noise_0.05` | modified (R3) | 0.05 (N3) | 120 |
+| 10 | `tuned_noise_0.00` | tuned (R4) | 0.0 (N1) | 120 |
+| 11 | `tuned_noise_0.02` | tuned (R4) | 0.02 (N2) | 120 |
+| 12 | `tuned_noise_0.05` | tuned (R4) | 0.05 (N3) | 120 |
 
-During environment steps, raw sensor distances are corrupted by Gaussian noise:
-
-```
-corrupted_distance = raw_distance + N(0, std²)
-corrupted_distance = max(0, min(MAX_DIST, corrupted_distance))  # Clamp to valid range
-```
-
-This simulates real-world sensor imperfections (e.g., lidar noise, camera calibration errors).
+**Total workload**: 12 experiments × 120 episodes = **1,440 episodes**
 
 ### Running Experiments
 
-#### Full Experiment Suite (All 9 Configurations)
+#### Via Colab Notebook (Recommended)
+
+Best for research! The Colab notebook handles:
+- Batch 1: Basic R1_N1, R1_N2, R1_N3
+- Batch 2: Shaped R2_N1, R2_N2, R2_N3
+- Batch 3: Modified R3_N1, R3_N2, R3_N3
+- Batch 4: Tuned R4_N1, R4_N2, R4_N3
+
+Each batch can be run independently (safe for Colab timeouts).
+
+#### Via Command Line
+
+Run all 12 experiments sequentially:
 
 ```bash
-python run_experiments.py
+python run_experiments.py --max-episodes 120 --headless
 ```
 
-This sequentially trains 9 agents with different configurations. Results are isolated:
-- **Logs**: `logs/{experiment_id}/training_log.jsonl`
-- **Models**: `models/{experiment_id}/td3_best.pth`, etc.
+This trains 12 agents with different configurations. Results are isolated:
+- **Logs**: `logs/R{reward_idx}_N{noise_idx}/training_log.jsonl`
+- **Models**: `models/R{reward_idx}_N{noise_idx}/`
 
-Typical runtime: 4-8 hours on a modern GPU
+Typical runtime: 4-6 hours on modern GPU
 
-#### Quick Validation (Small Experiment)
+Run specific subset (e.g., first 3 experiments):
 
 ```bash
-python run_experiments.py --max-experiments 2 --max-episodes 10 --max-steps 50 --headless
+python run_experiments.py --max-experiments 3 --max-episodes 120 --headless
 ```
 
-Tests the infrastructure with 2 experiments, 10 episodes each, 50 steps/episode. Runtime: ~2 minutes.
+Run by starting index (e.g., experiments 4-6 / Batch 2):
 
-#### Custom Experiments
-
-Edit the `EXPERIMENTS` dictionary in `config.py` to test custom configurations:
-
-```python
-EXPERIMENTS = {
-    "my_exp_1": {"reward_mode": "shaped", "sensor_noise_std": 0.03},
-    "my_exp_2": {"reward_mode": "modified", "sensor_noise_std": 0.01},
-}
-```
-
-Then run:
 ```bash
-python run_experiments.py
+python run_experiments.py --max-experiments 3 --start-index 3 --max-episodes 120 --headless
 ```
+
+#### Quick Validation (Small Test)
+
+```bash
+python run_experiments.py --max-experiments 2 --max-episodes 10 --headless
+```
+
+Tests infrastructure with 2 experiments, 10 episodes each. Runtime: ~2 minutes.
+
+#### Episode Count
+
+**Why 120 episodes?**
+- Enough to assess convergence and policy quality
+- Short enough to enable rapid prototyping and parameter sweeps
+- Practical for Colab sessions (4-6 hours total)
+- Default 5000-episode runs are overridden when `--max-episodes 120` is specified
 
 ---
 
 ## Results & Metrics
 
+### Research Focus
+
+The 12-experiment grid allows us to study:
+
+1. **Reward Mode Comparison** (across rows):
+   - How does R1 (basic) vs R2 (shaped) vs R3 (modified) vs R4 (tuned) perform?
+   - Which mode converges fastest?
+   - Which achieves best final lap completion rate?
+
+2. **Noise Robustness** (across columns):
+   - How does each reward mode degrade under sensor noise?
+   - Which mode is most robust to N2 (0.02) and N3 (0.05) noise?
+   - Is robustness worth the convergence trade-off?
+
+3. **Interaction Effects**:
+   - Do some reward modes handle noise better than others?
+   - Does the tuned mode (R4) maintain performance under noise?
+
 ### Metrics Tracked
 
-Each training episode logs the following metrics to `logs/{experiment_id}/training_log.jsonl`:
+Each training episode logs to `logs/R{reward_idx}_N{noise_idx}/training_log.jsonl`:
 
-| Metric | Description |
-|--------|-------------|
-| `episode` | Episode number (0-indexed) |
-| `reward_total` | Total reward accumulated in the episode |
-| `reward_rolling_avg_100` | Average reward over last 100 episodes (smoothed metric) |
-| `episode_length` | Number of steps before episode termination |
-| `laps_completed` | Integer lap count |
-| `collisions` | Number of collision/off-track events |
-| `avg_speed` | Mean velocity during the episode |
-| `steering_smoothness` | Measure of steering angle changes (lower = smoother) |
-| `experiment_name` | Experiment identifier (e.g., `shaped_noise_0.02`) |
-| `reward_mode` | Reward mode used (basic / shaped / modified) |
-| `sensor_noise_std` | Applied sensor noise standard deviation |
-| `seed` | Random seed for reproducibility |
+| Metric | Description | Usage |
+|--------|-------------|-------|
+| `episode` | Episode number (1-based) | Timeline tracking |
+| `reward_total` | Total episode reward | Primary learning signal |
+| `reward_rolling_avg_100` | Average reward over last 100 episodes | **Key metric: convergence speed** |
+| `length` | Steps before termination | Indicates success (longer = better) |
+| `laps_completed` | Number of completed laps | **Key metric: task success** |
+| `collisions` | Number of off-track/crash events | Risk metric |
+| `speed_mean` | Mean velocity during episode | Driving style indicator |
+| `steering_smooth` | Mean absolute steering magnitude | Control smoothness indicator |
+| `exploration_noise` | Current exploration noise level | Learning schedule |
 
 ### Interpretation Guide
 
 **Success indicators**:
-- `reward_rolling_avg_100` increases over time → agent is learning
-- `collisions` decreases as training progresses → agent learns to avoid crashes
-- `laps_completed` increases → agent learns to navigate successfully
-- `steering_smoothness` improves → policy becomes more stable
+- `reward_rolling_avg_100` increases consistently → agent learning
+- `laps_completed` rises over time → policy improving
+- `collisions` decrease → learning caution and smooth driving
+- `steering_smooth` decreases over time → steering becomes smoother and more stable
 
-**Problem signs**:
-- `reward_rolling_avg_100` plateaus early → may indicate reward design issue
-- `collisions` remain constant → agent not learning caution
-- `avg_speed` = 0 for many episodes → agent stuck (frozen policy or bad initialization)
+**Convergence**: Compare `reward_rolling_avg_100` curves across reward modes
+**Robustness**: Compare each mode's performance at N1 vs N2 vs N3
 
-### Evaluating Checkpoints
+### Comparative Analysis
 
-Compare learned models across experiments:
+After running all 12 experiments, generate comparison plots:
 
 ```bash
-python eval_models.py --episodes 20
+python plot_metrics.py --log-dir logs --experiments R1_N1 R1_N2 R1_N3 R2_N1 R2_N2 R2_N3 R3_N1 R3_N2 R3_N3 R4_N1 R4_N2 R4_N3 --compare --comparison-output results/plots/comparison
 ```
 
-This runs all saved checkpoints in `models/` for 20 evaluation episodes each and reports comparative statistics.
+This produces:
+- Per-experiment plots in each experiment log folder
+- Three comparison plots in `results/plots/comparison/`:
+   - `comparison_reward_vs_episodes.png`
+   - `comparison_crash_rate_vs_episodes.png`
+   - `comparison_laps_vs_episodes.png`
+- Note: if `logs/training_log.jsonl` exists, you must pass explicit `--experiments` to compare the 12 experiment folders.
+
+---
+
+## Results & Insights
+
+### Summary of 12-Experiment Study
+
+After running all experiments (4 reward modes × 3 noise levels × 120 episodes = 1,440 episodes total), typical trends in this repository's results are:
+
+### Key Findings
+
+#### 1. Reward Shaping Dramatically Improves Learning
+
+**R1 (Basic)** → **R2 (Shaped)** → **R3 (Modified)** → **R4 (Tuned)**
+
+- R1 shows **slow, erratic convergence** due to minimal reward guidance
+- R2 improves learning stability through balanced reward shaping
+- R3 adds robustness through enhanced speed and lap bonuses
+- **R4 achieves fastest convergence and best final performance** ⭐
+
+#### 2. Robustness Under Sensor Noise
+
+- Increasing sensor noise (N1 -> N3) degrades performance across all reward modes.
+- Better-shaped rewards (R3, R4) degrade more gracefully than R1.
+- Reward design and robustness are strongly coupled in this environment.
+
+#### 3. Lap Completion Success Rate
+
+- R1 has the lowest lap completion consistency.
+- R2 improves completion frequency versus R1.
+- R3 and R4 produce the most reliable lap completion behavior.
+- **R4 is the most consistent overall** in the current tracked runs.
+
+Noise gradually degrades success, but R4 remains robust.
+
+#### 4. Convergence Speed (Episodes to 80% of Best Performance)
+
+- R4 generally reaches stable performance earlier than R1-R3.
+- R1 typically requires more episodes and shows higher variance.
+- Higher noise increases time-to-stability for all modes.
+
+### Visualization of Results
+
+Full results and comparative plots are available in the `results/plots/` folder:
+
+#### Comparison Plots (For cross-experiment analysis)
+
+| Plot | File | Description |
+|------|------|-------------|
+| **Reward Curves** | `comparison_reward_vs_episodes.png` | Learning curves: all 4 modes at all 3 noise levels |
+| **Crash Rate** | `comparison_crash_rate_vs_episodes.png` | Safety analysis: off-track collision frequency |
+| **Lap Completion** | `comparison_laps_vs_episodes.png` | Task success: cumulative laps completed |
+
+![Reward Comparison](results/plots/comparison/comparison_reward_vs_episodes.png)
+![Crash Rate Comparison](results/plots/comparison/comparison_crash_rate_vs_episodes.png)
+
+#### Individual Plots (Per-experiment deep dives)
+
+12 folders, one per experiment: `results/plots/individual/{R1-R4}_{N1-N3}/`
+
+**Files in each folder** (3 plots per experiment):
+- `{mode}_noise_{level}_reward_vs_episodes.png` → Episode rewards over training
+- `{mode}_noise_{level}_crash_rate_vs_episodes.png` → Collision frequency over training  
+- `{mode}_noise_{level}_laps_vs_episodes.png` → Lap completion progress
+
+**Example**:
+- `results/plots/individual/R1_N1/basic_noise_0_00_reward_vs_episodes.png`
+- `results/plots/individual/R4_N3/tuned_noise_0_05_crash_rate_vs_episodes.png`
+
+![R4 N1 Reward Curve](results/plots/individual/R4_N1/tuned_noise_0_00_reward_vs_episodes.png)
+
+See [results/README.md](results/README.md) for complete analysis and interpretation guidelines.
+
+### Recommended Configuration
+
+Based on empirical results:
+
+- **For production/deployment**: Use **R4 (tuned reward)** with low noise tolerance
+- **For robustness**: Use **R4** and test under simulated N2-N3 noise conditions
+- **For research/ablation**: Full 12-experiment grid to validate findings
+- **For quick prototyping**: R3 or R4, skip R1-R2 (they underperform)
+
+### Generating Results Yourself
+
+```bash
+# Run all 12 experiments (via Colab is easiest)
+# See colab_demo.ipynb or:
+python run_experiments.py --max-episodes 120 --headless
+
+# Generate comparison plots in results/plots/comparison
+python plot_metrics.py --log-dir logs --experiments R1_N1 R1_N2 R1_N3 R2_N1 R2_N2 R2_N3 R3_N1 R3_N2 R3_N3 R4_N1 R4_N2 R4_N3 --compare --comparison-output results/plots/comparison
+
+# Export results
+python -c "import shutil; shutil.make_archive('td3_results', 'zip', 'results/')"
+```
 
 ---
 
@@ -514,13 +690,13 @@ After training, generate plots:
 
 ```bash
 # Plot single experiment
-python plot_metrics.py --log-dir logs --experiment shaped_noise_0.02
+python plot_metrics.py --log-dir logs --experiments R2_N1
 
 # Compare all experiments
-python plot_metrics.py --log-dir logs --compare
+python plot_metrics.py --log-dir logs --compare --comparison-output results/plots/comparison
 
 # Compare specific subset
-python plot_metrics.py --log-dir logs --experiments shaped_noise_0.00 shaped_noise_0.02 shaped_noise_0.05
+python plot_metrics.py --log-dir logs --experiments R2_N1 R2_N2 R2_N3 --compare
 ```
 
 Generated plots include:
@@ -556,12 +732,20 @@ td3-car-game/
 ├── models/                      # Saved checkpoints
 │   ├── td3_best.pth             # Best model overall
 │   ├── td3_best_avg100.pth      # Best by rolling avg reward
-│   ├── td3_ep100.pth            # Checkpoint at episode 100
 │   └── {experiment_id}/         # Experiment-specific models
-└── logs/                        # Training logs
-    ├── training_log.jsonl       # Global training log
-    └── {experiment_id}/         # Experiment-specific logs
-        └── training_log.jsonl
+├── logs/                        # Training logs and preview outputs
+│   ├── training_log.jsonl       # Global training log
+│   ├── demo_preview.png         # Demo preview snapshot
+│   └── {experiment_id}/         # Experiment-specific logs
+│       └── training_log.jsonl
+└── results/                     # Analysis artifacts (tracked plots)
+    ├── plots/
+    │   ├── comparison/         # Cross-experiment comparisons
+    │   │   ├── comparison_reward_vs_episodes.png
+    │   │   ├── comparison_crash_rate_vs_episodes.png
+    │   │   └── comparison_laps_vs_episodes.png
+    │   └── individual/         # Per-experiment plots (R1_N1 ... R4_N3)
+    └── README.md               # Results interpretation guide
 ```
 
 ### File Descriptions
@@ -580,7 +764,7 @@ td3-car-game/
 | **metrics_tracker.py** | Logs episode statistics to JSONL for analysis and plotting |
 | **plot_metrics.py** | Reads JSONL logs and generates matplotlib figures |
 | **eval_models.py** | Loads all checkpoints and runs evaluation benchmark |
-| **run_experiments.py** | Orchestrates the full experiment grid (9 configurations) sequentially |
+| **run_experiments.py** | Orchestrates the full experiment grid (12 configurations) sequentially |
 
 ---
 
@@ -593,14 +777,15 @@ All configuration is centralized in `config.py`. Important sections:
 #### Training (TD3)
 
 ```python
-LEARNING_RATE_ACTOR = 0.0001       # Actor learning rate
-LEARNING_RATE_CRITIC = 0.001       # Critic learning rate
+ACTOR_LR = 3e-4                    # Actor learning rate
+CRITIC_LR = 3e-4                   # Critic learning rate
 GAMMA = 0.99                       # Discount factor
 TAU = 0.005                        # Target network soft update rate
-BATCH_SIZE = 64                    # Mini-batch size
-REPLAY_BUFFER_SIZE = 100_000       # Max stored transitions
-TRAIN_FREQ = 1                     # Update frequency (steps per update)
-UPDATE_FREQ_ACTOR = 2              # Delay actor updates
+BUFFER_CAPACITY = 200_000          # Replay buffer capacity
+BATCH_SIZE = 256                   # Mini-batch size
+POLICY_DELAY = 2                   # Delayed actor updates
+POLICY_NOISE = 0.2                 # Target policy smoothing noise
+NOISE_CLIP = 0.5                   # Target noise clipping
 ```
 
 #### Environment
@@ -617,30 +802,22 @@ SENSOR_ANGLES = [-45, 0, 45]     # Sensor directions (degrees)
 
 ```python
 # Mode-specific reward constants
-REWARD_ALIVE = 1.0
-REWARD_FORWARD = 0.5
-REWARD_LAP = 100.0
-PENALTY_CRASH = -10.0
-PENALTY_STUCK = -5.0
-PENALTY_STEERING = -0.02           # Per radian
+REWARD_ALIVE = 0.05
+REWARD_SPEED_BONUS = 0.15
+REWARD_LAP_COMPLETION = 15.0
+REWARD_STEERING_PENALTY = 0.05
+REWARD_CRASH = -5.0
 ```
 
 ### Modifying Experiments
 
-Edit `EXPERIMENTS` dict in `config.py`:
+Edit experiment grids in `config.py`:
 
 ```python
-EXPERIMENTS = {
-    "basic_noise_0.00": {
-        "reward_mode": "basic",
-        "sensor_noise_std": 0.0,
-    },
-    "shaped_noise_0.02": {
-        "reward_mode": "shaped",
-        "sensor_noise_std": 0.02,
-    },
-    # ... add more configurations
-}
+EXPERIMENT_REWARD_MODES = ("basic", "shaped", "modified", "tuned")
+EXPERIMENT_SENSOR_NOISE_LEVELS = (0.0, 0.02, 0.05)
+
+# EXPERIMENTS is generated automatically from the cartesian product above.
 ```
 
 ---
@@ -663,8 +840,8 @@ EXPERIMENTS = {
 ### Experimental
 
 - **Limited noise model**: Only Gaussian sensor noise; no other uncertainty types
-- **Small scale**: 9 total experiments; limited statistical coverage
-- **No significance testing**: Results are single runs per configuration
+- **Deterministic runs**: Single run per configuration; no ensemble or random seed variation for statistical confidence
+- **Single track**: Only oval geometry; no complex routing or track variation
 
 ### Generalization
 
@@ -723,7 +900,8 @@ Please ensure code follows the existing style and includes docstrings.
 
 ## License
 
-This project is released under the **MIT License**. See LICENSE file for details.
+This repository currently does not include a standalone `LICENSE` file.
+Add your preferred license file before redistribution.
 
 ---
 

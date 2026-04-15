@@ -32,6 +32,14 @@ MANIFEST
 models/
 
 # ==============================
+# Training results and data
+# ==============================
+# Note: results/plots/ is tracked (contains analysis plots)
+# but results/logs/ and results/models/ should not be tracked
+results/logs/
+results/models/
+
+# ==============================
 # IDE / editor settings
 # ==============================
 .idea/
@@ -46,6 +54,7 @@ Thumbs.db
 # ==============================
 logs/
 *.log
+*.jsonl
 *.tmp
 *.bak
 
