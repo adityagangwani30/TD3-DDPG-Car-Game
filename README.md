@@ -650,7 +650,7 @@ python run_experiments.py --max-episodes 120 --headless
 python plot_metrics.py --log-dir logs --experiments R1_N1 R1_N2 R1_N3 R2_N1 R2_N2 R2_N3 R3_N1 R3_N2 R3_N3 R4_N1 R4_N2 R4_N3 --compare --comparison-output results/plots/comparison
 
 # Export results
-python -c "import shutil; shutil.make_archive('td3_results', 'zip', 'results/')"
+python -c "import shutil; shutil.make_archive('td3_results', 'zip', 'results')"
 ```
 
 ---

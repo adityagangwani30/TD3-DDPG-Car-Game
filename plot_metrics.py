@@ -10,12 +10,34 @@ Supports:
 import argparse
 import json
 import os
+from itertools import cycle
 from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
 
 from config import LOGS_DIR
+
+
+PLOT_DPI = 300
+FONT_SIZE = 13
+TITLE_SIZE = 15
+LEGEND_SIZE = 11
+LINE_WIDTH = 2.2
+MARKER_SIZE = 6
+MARKERS = ("o", "s", "^", "D", "P", "X", "v", "<", ">", "h")
+COLORS = (
+    "#1f77b4",
+    "#d62728",
+    "#2ca02c",
+    "#ff7f0e",
+    "#9467bd",
+    "#8c564b",
+    "#17becf",
+    "#e377c2",
+    "#7f7f7f",
+    "#bcbd22",
+)
 
 
 def load_logs(log_dir: str) -> list[dict]:
@@ -89,6 +111,43 @@ def extract_series(logs: list[dict], rolling_window: int) -> dict[str, np.ndarra
     }
 
 
+def configure_plot_style():
+    """Apply consistent publication-style formatting across all figures."""
+    plt.style.use("seaborn-v0_8-whitegrid")
+    plt.rcParams.update(
+        {
+            "font.family": "DejaVu Serif",
+            "font.size": FONT_SIZE,
+            "axes.titlesize": TITLE_SIZE,
+            "axes.labelsize": FONT_SIZE,
+            "xtick.labelsize": FONT_SIZE - 1,
+            "ytick.labelsize": FONT_SIZE - 1,
+            "legend.fontsize": LEGEND_SIZE,
+            "axes.grid": True,
+            "grid.linestyle": "--",
+            "grid.alpha": 0.6,
+        }
+    )
+
+
+def marker_every(num_points: int) -> int:
+    """Pick marker interval to keep plots readable without clutter."""
+    if num_points >= 500:
+        return 10
+    if num_points >= 100:
+        return 5
+    return max(1, num_points // 20)
+
+
+def annotate_peak_and_final(x: np.ndarray, y: np.ndarray, color: str):
+    """Highlight the maximum and final points for quick visual interpretation."""
+    if len(x) == 0 or len(y) == 0:
+        return
+    peak_idx = int(np.argmax(y))
+    plt.scatter(x[peak_idx], y[peak_idx], color=color, marker="*", s=130, zorder=5, label="Max")
+    plt.scatter(x[-1], y[-1], color=color, marker="X", s=80, zorder=5, label="Final")
+
+
 def plot_experiment(logs: list[dict], output_dir: str, experiment_name: str, window: int):
     """Generate publication-ready plots for one experiment."""
     if not logs:
@@ -106,50 +165,95 @@ def plot_experiment(logs: list[dict], output_dir: str, experiment_name: str, win
     crash_rate_rolling = series["crash_rate_rolling"]
     laps = series["laps"]
 
-    plt.style.use("seaborn-v0_8-whitegrid")
+    configure_plot_style()
+    markevery = marker_every(len(episodes))
 
     # Reward vs episodes
     plt.figure(figsize=(10, 5.5))
-    plt.plot(episodes, reward_total, color="#4C72B0", alpha=0.35, linewidth=1.2, label="Episode reward")
-    plt.plot(episodes, reward_rolling, color="#D62728", linewidth=2.2, label=f"Rolling avg ({window})")
+    plt.plot(
+        episodes,
+        reward_total,
+        color=COLORS[0],
+        alpha=0.4,
+        linewidth=LINE_WIDTH,
+        marker="o",
+        markersize=MARKER_SIZE,
+        markevery=markevery,
+        label="Episode reward",
+    )
+    plt.plot(
+        episodes,
+        reward_rolling,
+        color=COLORS[1],
+        linewidth=LINE_WIDTH,
+        marker="s",
+        markersize=MARKER_SIZE,
+        markevery=markevery,
+        label=f"Rolling avg ({window})",
+    )
+    annotate_peak_and_final(episodes, reward_rolling, color=COLORS[1])
     plt.xlabel("Episode")
     plt.ylabel("Total reward")
     plt.title(f"Reward vs Episodes ({experiment_name})")
     plt.legend(loc="best")
     plt.tight_layout()
     reward_path = os.path.join(output_dir, f"{safe_name}_reward_vs_episodes.png")
-    plt.savefig(reward_path, dpi=220)
+    plt.savefig(reward_path, dpi=PLOT_DPI, bbox_inches="tight")
     plt.close()
 
     # Crash rate vs episodes
     plt.figure(figsize=(10, 5.5))
-    plt.plot(episodes, crashes, color="#8C564B", alpha=0.28, linewidth=1.0, label="Crashes per episode")
+    plt.plot(
+        episodes,
+        crashes,
+        color=COLORS[5],
+        alpha=0.35,
+        linewidth=LINE_WIDTH,
+        marker="^",
+        markersize=MARKER_SIZE,
+        markevery=markevery,
+        label="Crashes per episode",
+    )
     plt.plot(
         episodes,
         crash_rate_rolling,
-        color="#FF7F0E",
-        linewidth=2.2,
+        color=COLORS[3],
+        linewidth=LINE_WIDTH,
+        marker="D",
+        markersize=MARKER_SIZE,
+        markevery=markevery,
         label=f"Rolling crash rate ({window})",
     )
+    annotate_peak_and_final(episodes, crash_rate_rolling, color=COLORS[3])
     plt.xlabel("Episode")
     plt.ylabel("Crash count / rate")
     plt.title(f"Crash Rate vs Episodes ({experiment_name})")
     plt.legend(loc="best")
     plt.tight_layout()
     crash_path = os.path.join(output_dir, f"{safe_name}_crash_rate_vs_episodes.png")
-    plt.savefig(crash_path, dpi=220)
+    plt.savefig(crash_path, dpi=PLOT_DPI, bbox_inches="tight")
     plt.close()
 
     # Laps vs episodes
     plt.figure(figsize=(10, 5.5))
-    plt.plot(episodes, laps, color="#2CA02C", linewidth=1.8, label="Laps completed")
+    plt.plot(
+        episodes,
+        laps,
+        color=COLORS[2],
+        linewidth=LINE_WIDTH,
+        marker="P",
+        markersize=MARKER_SIZE,
+        markevery=markevery,
+        label="Laps completed",
+    )
+    annotate_peak_and_final(episodes, laps, color=COLORS[2])
     plt.xlabel("Episode")
     plt.ylabel("Laps completed")
     plt.title(f"Laps vs Episodes ({experiment_name})")
     plt.legend(loc="best")
     plt.tight_layout()
     laps_path = os.path.join(output_dir, f"{safe_name}_laps_vs_episodes.png")
-    plt.savefig(laps_path, dpi=220)
+    plt.savefig(laps_path, dpi=PLOT_DPI, bbox_inches="tight")
     plt.close()
 
     print(f"[plot] Saved: {reward_path}")
@@ -192,49 +296,87 @@ def plot_comparison(experiment_logs: dict[str, list[dict]], output_dir: str, win
         return
 
     os.makedirs(output_dir, exist_ok=True)
-    plt.style.use("seaborn-v0_8-whitegrid")
+    configure_plot_style()
+    marker_cycle = cycle(MARKERS)
+    color_cycle = cycle(COLORS)
 
     # Comparison: reward
     plt.figure(figsize=(10.5, 6.0))
+    marker_cycle = cycle(MARKERS)
+    color_cycle = cycle(COLORS)
     for name, logs in experiment_logs.items():
         series = extract_series(logs, rolling_window=window)
-        plt.plot(series["episodes"], series["reward_rolling"], linewidth=2.0, label=name)
+        markevery = marker_every(len(series["episodes"]))
+        plt.plot(
+            series["episodes"],
+            series["reward_rolling"],
+            linewidth=LINE_WIDTH,
+            marker=next(marker_cycle),
+            markersize=MARKER_SIZE,
+            markevery=markevery,
+            color=next(color_cycle),
+            label=name,
+        )
     plt.xlabel("Episode")
     plt.ylabel(f"Rolling average reward ({window})")
     plt.title("Experiment Comparison: Reward")
     plt.legend(loc="best")
     plt.tight_layout()
     reward_path = os.path.join(output_dir, "comparison_reward_vs_episodes.png")
-    plt.savefig(reward_path, dpi=220)
+    plt.savefig(reward_path, dpi=PLOT_DPI, bbox_inches="tight")
     plt.close()
 
     # Comparison: crash rate
     plt.figure(figsize=(10.5, 6.0))
+    marker_cycle = cycle(MARKERS)
+    color_cycle = cycle(COLORS)
     for name, logs in experiment_logs.items():
         series = extract_series(logs, rolling_window=window)
-        plt.plot(series["episodes"], series["crash_rate_rolling"], linewidth=2.0, label=name)
+        markevery = marker_every(len(series["episodes"]))
+        plt.plot(
+            series["episodes"],
+            series["crash_rate_rolling"],
+            linewidth=LINE_WIDTH,
+            marker=next(marker_cycle),
+            markersize=MARKER_SIZE,
+            markevery=markevery,
+            color=next(color_cycle),
+            label=name,
+        )
     plt.xlabel("Episode")
     plt.ylabel(f"Rolling crash rate ({window})")
     plt.title("Experiment Comparison: Crash Rate")
     plt.legend(loc="best")
     plt.tight_layout()
     crash_path = os.path.join(output_dir, "comparison_crash_rate_vs_episodes.png")
-    plt.savefig(crash_path, dpi=220)
+    plt.savefig(crash_path, dpi=PLOT_DPI, bbox_inches="tight")
     plt.close()
 
     # Comparison: laps
     plt.figure(figsize=(10.5, 6.0))
+    marker_cycle = cycle(MARKERS)
+    color_cycle = cycle(COLORS)
     for name, logs in experiment_logs.items():
         series = extract_series(logs, rolling_window=window)
         laps_rolling = rolling_mean(series["laps"].tolist(), window)
-        plt.plot(series["episodes"], laps_rolling, linewidth=2.0, label=name)
+        markevery = marker_every(len(series["episodes"]))
+        plt.plot(
+            series["episodes"],
+            laps_rolling,
+            linewidth=LINE_WIDTH,
+            marker=next(marker_cycle),
+            markersize=MARKER_SIZE,
+            markevery=markevery,
+            color=next(color_cycle),
+            label=name,
+        )
     plt.xlabel("Episode")
     plt.ylabel(f"Rolling laps completed ({window})")
     plt.title("Experiment Comparison: Laps")
     plt.legend(loc="best")
     plt.tight_layout()
     laps_path = os.path.join(output_dir, "comparison_laps_vs_episodes.png")
-    plt.savefig(laps_path, dpi=220)
+    plt.savefig(laps_path, dpi=PLOT_DPI, bbox_inches="tight")
     plt.close()
 
     print(f"[plot] Saved: {reward_path}")
@@ -268,10 +410,16 @@ def main():
         help="Rolling window size for smoothed metrics (default: 100)",
     )
     parser.add_argument(
+        "--individual-output",
+        type=str,
+        default=os.path.join("results", "plots", "individual"),
+        help="Output base directory for per-experiment plots (default: results/plots/individual)",
+    )
+    parser.add_argument(
         "--comparison-output",
         type=str,
-        default=None,
-        help="Output directory for comparison plots (default: <log-dir>/comparison)",
+        default=os.path.join("results", "plots", "comparison"),
+        help="Output directory for comparison plots (default: results/plots/comparison)",
     )
     args = parser.parse_args()
 
@@ -289,14 +437,21 @@ def main():
 
         exp_name = infer_experiment_name(logs, fallback=raw_name)
         loaded[exp_name] = logs
-        plot_experiment(logs, output_dir=exp_dir, experiment_name=exp_name, window=max(1, args.window))
+        individual_exp_dir = os.path.join(args.individual_output, sanitize_name(raw_name))
+        os.makedirs(individual_exp_dir, exist_ok=True)
+        plot_experiment(
+            logs,
+            output_dir=individual_exp_dir,
+            experiment_name=exp_name,
+            window=max(1, args.window),
+        )
 
     if not loaded:
         print("[plot] No valid logs loaded.")
         return
 
     if args.compare or len(loaded) > 1:
-        comparison_out = args.comparison_output or os.path.join(args.log_dir, "comparison")
+        comparison_out = args.comparison_output
         plot_comparison(loaded, output_dir=comparison_out, window=max(1, args.window))
 
     print(f"[plot] Completed for {len(loaded)} experiment(s).")
