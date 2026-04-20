@@ -75,9 +75,10 @@ This project investigates how two factors influence TD3 learning in continuous c
 ### Hypotheses
 
 - Well-designed reward functions should accelerate convergence and improve final policy quality
-- Sensor noise degrades performance, but robust rewards can mitigate this degradation
-- The "tuned" reward mode (R4) should outperform baseline modes due to stronger shaping
+- Sensor noise can alter performance in non-linear ways, and robust rewards may mitigate degradation in some settings
+- The "tuned" reward mode (R4) is expected to be strong, but relative ranking depends on reward-noise interaction
 - The interaction between reward mode and noise level is non-trivial and worth studying empirically
+- Results may vary across runs due to stochastic reinforcement learning dynamics
 
 ---
 
@@ -218,18 +219,18 @@ R_tuned = +0.08 alive_reward (increased from 0.05)
 - Lower steering penalty (0.03) → encourages bolder control
 - Strong anti-idle penalties → prevents stuck episodes
 
-**Purpose**: Aggressive reward for **faster convergence and stronger robustness**  
-**Characteristics**: Fastest learning, best final performance on clean tasks  
-**Note**: This is the recommended mode for most applications
+**Purpose**: Aggressive reward shaping for strong performance in many settings  
+**Characteristics**: Often fast learning with competitive final performance; outcomes depend on reward-noise interaction  
+**Note**: A strong candidate mode, but not consistently dominant across all runs/settings
 
 #### Comparative Summary
 
 | Aspect | Basic | Shaped | Modified | Tuned |
 |--------|-------|--------|----------|-------|
-| Convergence | Slow | Medium | Fast | Fastest |
+| Convergence | Slow | Medium | Fast | Fast / Competitive |
 | Stability | Low | Medium | High | High |
 | Exploration | Low | Medium | Medium | High |
-| Robustness | Poor | Good | Better | Best |
+| Robustness | Poor | Good | Better | Strong / Competitive |
 
 
 
@@ -443,7 +444,7 @@ We study **12 experiments** via systematic grid search:
 
 #### Via Colab Notebook (Recommended)
 
-Best for research! The Colab notebook handles:
+Convenient for research workflows, the Colab notebook handles:
 - Batch 1: Basic R1_N1, R1_N2, R1_N3
 - Batch 2: Shaped R2_N1, R2_N2, R2_N3
 - Batch 3: Modified R3_N1, R3_N2, R3_N3
@@ -564,39 +565,46 @@ This produces:
 
 ### Summary of 12-Experiment Study
 
-After running all experiments (4 reward modes × 3 noise levels × 120 episodes = 1,440 episodes total), typical trends in this repository's results are:
+After running all experiments (4 reward modes × 3 noise levels × 120 episodes = 1,440 episodes total), the latest tracked run shows the following trends:
+
+Note: Due to the stochastic nature of reinforcement learning, exact values may vary slightly across runs, but overall trends remain consistent.
 
 ### Key Findings
 
 #### 1. Reward Shaping Dramatically Improves Learning
 
-**R1 (Basic)** → **R2 (Shaped)** → **R3 (Modified)** → **R4 (Tuned)**
+Current reward ranking in this run is:
+
+**R3 (Modified)** → **R4 (Tuned)** → **R2 (Shaped)** → **R1 (Basic)**
 
 - R1 shows **slow, erratic convergence** due to minimal reward guidance
-- R2 improves learning stability through balanced reward shaping
-- R3 adds robustness through enhanced speed and lap bonuses
-- **R4 achieves fastest convergence and best final performance** ⭐
+- R2 improves over R1 in some settings, but is not the top performer in this run
+- R3 provides the strongest final reward in this run (especially at N2)
+- R4 remains competitive and is second-best in average final reward
 
 #### 2. Robustness Under Sensor Noise
 
-- Increasing sensor noise (N1 -> N3) degrades performance across all reward modes.
-- Better-shaped rewards (R3, R4) degrade more gracefully than R1.
-- Reward design and robustness are strongly coupled in this environment.
+- Noise response is **not strictly monotonic** in this run.
+- Moderate noise (N2) yields the strongest performance for both R3 and R4.
+- High noise (N3) still degrades most settings, but the pattern depends on reward design.
+- Reward design and robustness remain strongly coupled in this environment.
+
+Moderate noise can improve performance under certain reward configurations, indicating a non-linear interaction between reward design and environmental uncertainty.
 
 #### 3. Lap Completion Success Rate
 
 - R1 has the lowest lap completion consistency.
-- R2 improves completion frequency versus R1.
-- R3 and R4 produce the most reliable lap completion behavior.
-- **R4 is the most consistent overall** in the current tracked runs.
+- R2 can improve completion frequency versus R1 in clean settings.
+- R3 shows the strongest lap-completion outcome in this run (driven by R3_N2).
+- R4 is competitive in reward but not the top mode for laps in this run.
 
-Noise gradually degrades success, but R4 remains robust.
+Noise does not uniformly degrade lap completion in a simple N1 -> N3 pattern for all reward modes.
 
 #### 4. Convergence Speed (Episodes to 80% of Best Performance)
 
-- R4 generally reaches stable performance earlier than R1-R3.
-- R1 typically requires more episodes and shows higher variance.
-- Higher noise increases time-to-stability for all modes.
+- R3_N2 and R4_N2 show the fastest late-run improvement in this run.
+- R1 still shows high variance and weaker convergence quality overall.
+- Time-to-stability varies by reward-noise interaction rather than noise level alone.
 
 ### Visualization of Results
 
@@ -634,10 +642,10 @@ See [results/README.md](results/README.md) for complete analysis and interpretat
 
 Based on empirical results:
 
-- **For production/deployment**: Use **R4 (tuned reward)** with low noise tolerance
-- **For robustness**: Use **R4** and test under simulated N2-N3 noise conditions
-- **For research/ablation**: Full 12-experiment grid to validate findings
-- **For quick prototyping**: R3 or R4, skip R1-R2 (they underperform)
+- **For highest reward in this tracked run**: Use **R3 at N2 (0.02)**
+- **For strong alternative**: Use **R4 at N2 (0.02)**
+- **For robustness claims**: Validate with repeated seeds before final conclusions
+- **For research/ablation**: Keep the full 12-experiment grid and report variance across runs
 
 ### Generating Results Yourself
 
