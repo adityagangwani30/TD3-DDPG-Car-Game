@@ -2,7 +2,8 @@
 
 Train and evaluate continuous-control RL agents in a custom 2D car racing environment with reproducible reward and sensor-noise experiments.
 
-[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/adityagangwani30/TD3-Car-Game/blob/main/colab_demo.ipynb)
+[![Open TD3 Notebook in Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/adityagangwani30/TD3-Car-Game/blob/main/colab_demo_td3.ipynb)
+[![Open DDPG Notebook in Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/adityagangwani30/TD3-Car-Game/blob/main/colab_demo_ddpg.ipynb)
 
 ## Overview
 This project is a practical reinforcement learning playground for autonomous driving concepts. A virtual car learns to steer and throttle on an oval track using deep RL, with support for both TD3 and DDPG.
@@ -22,7 +23,8 @@ Why this project is interesting:
 - Full experiment grid across two algorithms (24 total runs).
 - Training logs, model checkpoints, and plotting utilities.
 - Headless execution support for cloud/Kaggle/CI-style environments.
-- Colab notebook for fast setup and demonstration workflow.
+- Separate Colab notebooks for TD3 and DDPG setup/run workflows.
+- Plotting supports partial experiment completion (uses available logs).
 
 ## Tech Stack
 - Python
@@ -42,7 +44,8 @@ Why this project is interesting:
 - `logs/`: Per-run metrics logs (`training_log.jsonl`).
 - `models/`: Saved checkpoints per algorithm and experiment.
 - `results/`: Generated plots and analysis outputs.
-- `colab_demo.ipynb`: Notebook-based setup and run flow.
+- `colab_demo_td3.ipynb`: Colab setup and run flow for TD3 experiments.
+- `colab_demo_ddpg.ipynb`: Colab setup and run flow for DDPG experiments.
 
 ## How It Works
 ### State Space
