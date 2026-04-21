@@ -6,6 +6,7 @@ exploration noise decay, and comprehensive metrics tracking.
 """
 
 import os
+import json
 
 import numpy as np
 import pygame
@@ -30,6 +31,34 @@ from replay_buffer import ReplayBuffer
 from ddpg_agent import DDPGAgent
 from td3_agent import TD3Agent
 from utils import set_global_seed
+
+
+def _load_existing_progress(log_file: str) -> tuple[int, list[float]]:
+    """Return (last_episode, reward_history) from an existing JSONL metrics log."""
+    if not os.path.exists(log_file):
+        return 0, []
+
+    last_episode = 0
+    reward_history: list[float] = []
+    try:
+        with open(log_file, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    payload = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                episode = int(payload.get("episode", 0) or 0)
+                if episode > 0:
+                    last_episode = max(last_episode, episode)
+                if "reward_total" in payload:
+                    reward_history.append(float(payload.get("reward_total", 0.0)))
+    except OSError:
+        return 0, []
+
+    return last_episode, reward_history
 
 
 def _should_render_episode(episode: int) -> bool:
@@ -125,12 +154,31 @@ def train_with_config(
         max_steps_per_episode if max_steps_per_episode is not None else MAX_STEPS_PER_EPISODE
     )
 
+    start_episode = 1
+    loaded_reward_history: list[float] = []
+    existing_log_file = getattr(metrics, "log_file", "")
+    if checkpoint_path and existing_log_file:
+        last_logged_episode, loaded_reward_history = _load_existing_progress(existing_log_file)
+        if last_logged_episode >= total_episodes:
+            print(
+                f"{prefix}[train] Existing log already reached episode {last_logged_episode}/{total_episodes}. "
+                "Skipping training."
+            )
+            env.close()
+            return
+        if last_logged_episode > 0:
+            start_episode = last_logged_episode + 1
+            print(
+                f"{prefix}[train] Resuming from episode {start_episode}/{total_episodes} "
+                f"(detected {last_logged_episode} completed episodes in log)."
+            )
+
     best_reward = -float("inf")
     best_reward_per_100 = -float("inf")
-    reward_history = []
+    reward_history = loaded_reward_history.copy()
     exploration_noise = EXPLORATION_NOISE
 
-    for episode in range(1, total_episodes + 1):
+    for episode in range(start_episode, total_episodes + 1):
         state = env.reset()
         episode_reward = 0.0
         episode_length = 0
