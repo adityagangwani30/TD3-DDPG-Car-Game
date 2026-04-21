@@ -1,9 +1,9 @@
 """
-run_experiments.py - Sequential experiment runner for TD3 car training.
+run_experiments.py - Sequential experiment runner for TD3 and DDPG training.
 
-Runs all experiment combinations from config.EXPERIMENTS and keeps outputs isolated:
-  - Logs:   logs/R{reward_idx}_N{noise_idx}/training_log.jsonl
-  - Models: models/R{reward_idx}_N{noise_idx}/
+Runs all experiment combinations from config.EXPERIMENTS across algorithms:
+    - Logs:   logs/{algo}/R{reward_idx}_N{noise_idx}/training_log.jsonl
+    - Models: models/{algo}/R{reward_idx}_N{noise_idx}/
 """
 
 import argparse
@@ -21,9 +21,12 @@ from config import (
     MODEL_DIR,
 )
 from environment import CarRacingEnv
-from td3_agent import TD3Agent
 from train import train_with_config
 from utils import init_pygame, set_global_seed
+
+
+ALGORITHMS = ["td3", "ddpg"]
+assert len(EXPERIMENTS) * len(ALGORITHMS) == 24, "Expected 24 total experiments (12 x 2 algorithms)"
 
 
 def _experiment_tag(reward_mode: str, sensor_noise_std: float) -> str:
@@ -42,32 +45,43 @@ def run_all_experiments(
 ):
     """Run all configured experiments sequentially with isolated outputs."""
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    experiments = list(EXPERIMENTS.items())
-    experiments = experiments[start_index:]
-    if max_experiments is not None:
-        experiments = experiments[: max(0, max_experiments)]
+    experiment_grid = list(EXPERIMENTS.items())
 
-    if not experiments:
+    scheduled_runs = []
+    for algo in ALGORITHMS:
+        for experiment_name, cfg in experiment_grid:
+            reward_mode = cfg["reward_mode"]
+            sensor_noise_std = cfg["sensor_noise_std"]
+            tag = _experiment_tag(reward_mode, sensor_noise_std)
+            experiment_id = f"{algo}_{tag}"
+            scheduled_runs.append((algo, experiment_id, experiment_name, cfg))
+
+    scheduled_runs = scheduled_runs[start_index:]
+    if max_experiments is not None:
+        scheduled_runs = scheduled_runs[: max(0, max_experiments)]
+
+    if not scheduled_runs:
         print("[experiments] No experiments selected. Nothing to run.")
         return
 
     print("=" * 72)
-    print(f"Running {len(experiments)} experiments sequentially on device: {device}")
+    print(f"Running {len(scheduled_runs)} experiments sequentially on device: {device}")
     print("=" * 72)
 
-    for index, (experiment_name, cfg) in enumerate(experiments, start=1):
+    for index, (algo, experiment_id, experiment_name, cfg) in enumerate(scheduled_runs, start=1):
         reward_mode = cfg["reward_mode"]
         sensor_noise_std = cfg["sensor_noise_std"]
-        seed = EXPERIMENT_BASE_SEED + index - 1
+        seed = EXPERIMENT_BASE_SEED + start_index + index - 1
         tag = _experiment_tag(reward_mode, sensor_noise_std)
 
-        exp_log_dir = os.path.join(LOGS_DIR, tag)
-        exp_model_dir = os.path.join(MODEL_DIR, tag)
+        exp_log_dir = os.path.join(LOGS_DIR, algo, tag)
+        exp_model_dir = os.path.join(MODEL_DIR, algo, tag)
         os.makedirs(exp_log_dir, exist_ok=True)
         os.makedirs(exp_model_dir, exist_ok=True)
 
         print("\n" + "-" * 72)
-        print(f"Experiment {index}/{len(experiments)}: {experiment_name} ({tag})")
+        print(f"Experiment {index}/{len(scheduled_runs)}: {experiment_id} ({experiment_name})")
+        print(f"  algorithm        : {algo}")
         print(f"  reward_mode      : {reward_mode}")
         print(f"  sensor_noise_std : {sensor_noise_std}")
         print(f"  seed             : {seed}")
@@ -82,20 +96,19 @@ def run_all_experiments(
             reward_mode=reward_mode,
             sensor_noise_std=sensor_noise_std,
             metrics_log_dir=exp_log_dir,
-            experiment_name=experiment_name,
+            experiment_name=experiment_id,
             seed=seed,
             headless=headless,
         )
 
-        agent = TD3Agent(device=device)
-
         try:
             train_with_config(
                 env,
-                agent,
+                algo=algo,
+                device=device,
                 model_dir=exp_model_dir,
-                run_label=f"{tag} {index}/{len(experiments)}",
-                experiment_name=experiment_name,
+                run_label=f"{experiment_id} {index}/{len(scheduled_runs)}",
+                experiment_name=experiment_id,
                 seed=seed,
                 max_episodes=max_episodes,
                 max_steps_per_episode=max_steps,
@@ -112,7 +125,7 @@ def run_all_experiments(
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Run TD3 experiments sequentially")
+    parser = argparse.ArgumentParser(description="Run TD3 and DDPG experiments sequentially")
     parser.add_argument(
         "--max-experiments",
         type=int,

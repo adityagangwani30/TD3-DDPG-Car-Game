@@ -1,14 +1,14 @@
 """
-main.py - Entry point for the TD3 self-driving car simulation.
+main.py - Entry point for deterministic policy-gradient car training.
 
 Usage:
-    python main.py [--mode train|eval|demo] [--checkpoint path/to/model.pth] [--resume]
+    python main.py --algo {td3,ddpg} [--mode train|eval|demo] [--checkpoint path/to/model.pth] [--resume]
 
 Examples:
-    python main.py                                    # Train the agent
-    python main.py --mode eval                        # Evaluate using latest checkpoint
-    python main.py --mode demo                        # Run a quick demo
-    python main.py --mode eval --checkpoint models/td3_ep500.pth  # Evaluate specific model
+    python main.py --algo td3                         # Train the TD3 agent
+    python main.py --algo ddpg --mode eval            # Evaluate DDPG using latest checkpoint
+    python main.py --algo td3 --mode demo             # Run a quick TD3 demo
+    python main.py --algo ddpg --mode eval --checkpoint models/ddpg/ddpg_ep500.pth
 """
 
 import argparse
@@ -28,18 +28,20 @@ import pygame
 import torch
 
 from config import DEFAULT_SEED
+from ddpg_agent import DDPGAgent
 from environment import CarRacingEnv
 from td3_agent import TD3Agent
 from train import train, evaluate
 from utils import init_pygame, set_global_seed
 
-def _find_default_checkpoint() -> str | None:
+def _find_default_checkpoint(algo: str) -> str | None:
     """Return the best available checkpoint, if one exists."""
+    model_dir = Path("models") / algo
     candidates = [
-        Path("models/td3_best.pth"),
-        Path("models/td3_best_avg100.pth"),
+        model_dir / f"{algo}_best.pth",
+        model_dir / f"{algo}_best_avg100.pth",
     ]
-    candidates.extend(sorted(Path("models").glob("td3_ep*.pth"), reverse=True))
+    candidates.extend(sorted(model_dir.glob(f"{algo}_ep*.pth"), reverse=True))
 
     for candidate in candidates:
         if candidate.exists():
@@ -47,15 +49,16 @@ def _find_default_checkpoint() -> str | None:
     return None
 
 
-def _find_resume_candidates() -> list[str]:
+def _find_resume_candidates(algo: str) -> list[str]:
     """Return resume candidates ordered from most to least preferred."""
+    model_dir = Path("models") / algo
     candidates: list[Path] = []
 
     periodic = []
-    for candidate in Path("models").glob("td3_ep*.pth"):
+    for candidate in model_dir.glob(f"{algo}_ep*.pth"):
         stem = candidate.stem
         try:
-            episode_number = int(stem.replace("td3_ep", ""))
+            episode_number = int(stem.replace(f"{algo}_ep", ""))
         except ValueError:
             continue
         periodic.append((episode_number, candidate))
@@ -63,14 +66,23 @@ def _find_resume_candidates() -> list[str]:
     periodic.sort(key=lambda item: item[0], reverse=True)
     candidates.extend(path for _, path in periodic)
 
-    for fallback in [Path("models/td3_best_avg100.pth"), Path("models/td3_best.pth")]:
+    for fallback in [model_dir / f"{algo}_best_avg100.pth", model_dir / f"{algo}_best.pth"]:
         if fallback.exists() and fallback not in candidates:
             candidates.append(fallback)
 
     return [str(path) for path in candidates]
 
 
-def _try_load_checkpoint(agent: TD3Agent, checkpoint_path: str, required: bool) -> bool:
+def _build_agent(algo: str, device: str):
+    """Create an agent instance for the requested algorithm."""
+    if algo == "td3":
+        return TD3Agent(device=device)
+    if algo == "ddpg":
+        return DDPGAgent(device=device)
+    raise ValueError("Unsupported algorithm")
+
+
+def _try_load_checkpoint(agent, checkpoint_path: str, required: bool) -> bool:
     """Load a checkpoint and optionally fail if it is incompatible."""
     try:
         agent.load(checkpoint_path)
@@ -86,7 +98,13 @@ def _try_load_checkpoint(agent: TD3Agent, checkpoint_path: str, required: bool) 
 
 def main():
     """Initialize Pygame, create the environment, and run training or evaluation."""
-    parser = argparse.ArgumentParser(description="TD3 Self-Driving Car - Training/Eval/Demo")
+    parser = argparse.ArgumentParser(description="Deterministic Policy Gradient Car - Training/Eval/Demo")
+    parser.add_argument(
+        "--algo",
+        choices=["td3", "ddpg"],
+        default=None,
+        help="Algorithm to run",
+    )
     parser.add_argument(
         "--mode", 
         choices=["train", "eval", "demo"], 
@@ -146,6 +164,9 @@ def main():
     )
     args = parser.parse_args()
 
+    if args.algo is None:
+        raise ValueError("You must specify --algo {td3, ddpg}")
+
     # Use auto-detected headless mode unless explicitly overridden
     effective_headless = args.headless or HEADLESS
     
@@ -157,22 +178,27 @@ def main():
     mode_str = "HEADLESS (off-screen rendering)" if effective_headless else "GUI (interactive window)"
     print(f"\n{'='*70}")
     print(f"[main] Visualization: {mode_str}")
+    print(f"[main] Algorithm: {args.algo}")
     print(f"[main] Device: {device}")
     print(f"{'='*70}\n")
 
+    algo_logs_dir = str(Path("logs") / args.algo)
+    algo_model_dir = str(Path("models") / args.algo)
+
     env = CarRacingEnv(
         experiment_name="default",
+        metrics_log_dir=algo_logs_dir,
         seed=args.seed,
         headless=effective_headless
     )
-    agent = TD3Agent(device=device)
+    agent = _build_agent(args.algo, device=device)
 
     checkpoint_path = None
     loaded_for_training = False
     if args.checkpoint:
         checkpoint_path = args.checkpoint
     elif args.mode == "train" and args.resume:
-        resume_candidates = _find_resume_candidates()
+        resume_candidates = _find_resume_candidates(args.algo)
         for candidate in resume_candidates:
             print(f"[main] Trying resume checkpoint: {candidate}")
             if _try_load_checkpoint(agent, candidate, required=False):
@@ -180,7 +206,7 @@ def main():
                 loaded_for_training = True
                 break
     elif args.mode in {"eval", "demo"}:
-        checkpoint_path = _find_default_checkpoint()
+        checkpoint_path = _find_default_checkpoint(args.algo)
 
     if checkpoint_path and not loaded_for_training:
         print(f"[main] Using checkpoint: {checkpoint_path}")
@@ -201,7 +227,11 @@ def main():
             print("[main] Starting training...")
             train(
                 env,
-                agent,
+                algo=args.algo,
+                device=device,
+                model_dir=algo_model_dir,
+                checkpoint_path=checkpoint_path if loaded_for_training else None,
+                require_checkpoint=bool(args.checkpoint),
                 experiment_name="default",
                 seed=args.seed,
                 max_episodes=args.max_episodes,

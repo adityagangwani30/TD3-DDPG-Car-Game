@@ -1,7 +1,7 @@
 """
-train.py - Training loop for the TD3 self-driving car.
+train.py - Training loop for deterministic policy-gradient car training.
 
-Orchestrates episode collection, replay-buffer storage, TD3 network updates,
+Orchestrates episode collection, replay-buffer storage, network updates,
 exploration noise decay, and comprehensive metrics tracking.
 """
 
@@ -27,6 +27,7 @@ from config import (
 from environment import CarRacingEnv
 from metrics_tracker import MetricsTracker
 from replay_buffer import ReplayBuffer
+from ddpg_agent import DDPGAgent
 from td3_agent import TD3Agent
 from utils import set_global_seed
 
@@ -40,7 +41,12 @@ def _should_render_episode(episode: int) -> bool:
 
 def train(
     env: CarRacingEnv,
-    agent: TD3Agent,
+    algo: str,
+    device: str = "cpu",
+    model_dir: str | None = None,
+    run_label: str | None = None,
+    checkpoint_path: str | None = None,
+    require_checkpoint: bool = False,
     experiment_name: str = "default",
     seed: int | None = None,
     max_episodes: int | None = None,
@@ -49,7 +55,12 @@ def train(
     """Run the main training loop with exploration decay and metrics tracking."""
     return train_with_config(
         env,
-        agent,
+        algo=algo,
+        device=device,
+        model_dir=model_dir,
+        run_label=run_label,
+        checkpoint_path=checkpoint_path,
+        require_checkpoint=require_checkpoint,
         experiment_name=experiment_name,
         seed=seed,
         max_episodes=max_episodes,
@@ -59,15 +70,19 @@ def train(
 
 def train_with_config(
     env: CarRacingEnv,
-    agent: TD3Agent,
+    algo: str,
+    device: str = "cpu",
     model_dir: str | None = None,
     run_label: str | None = None,
+    checkpoint_path: str | None = None,
+    require_checkpoint: bool = False,
     experiment_name: str = "default",
     seed: int | None = None,
     max_episodes: int | None = None,
     max_steps_per_episode: int | None = None,
 ):
     """Run training with optional custom output directory and run label."""
+    prefix = f"[{run_label}] " if run_label else ""
     resolved_seed = DEFAULT_SEED if seed is None else int(seed)
     set_global_seed(resolved_seed)
 
@@ -78,10 +93,26 @@ def train_with_config(
         sensor_noise_std=getattr(env, "sensor_noise_std", None),
         seed=resolved_seed,
     )
-    target_model_dir = model_dir or MODEL_DIR
-    os.makedirs(target_model_dir, exist_ok=True)
+    if algo == "td3":
+        agent = TD3Agent(device=device)
+    elif algo == "ddpg":
+        agent = DDPGAgent(device=device)
+    else:
+        raise ValueError("Unsupported algorithm")
 
-    prefix = f"[{run_label}] " if run_label else ""
+    if checkpoint_path:
+        try:
+            agent.load(checkpoint_path)
+            print(f"{prefix}[train] Loaded checkpoint: {checkpoint_path}")
+        except (RuntimeError, KeyError, FileNotFoundError) as exc:
+            message = f"{prefix}[train] Could not load checkpoint '{checkpoint_path}': {exc}"
+            if require_checkpoint:
+                raise RuntimeError(message) from exc
+            print(message)
+            print(f"{prefix}[train] Continuing with freshly initialized weights.")
+
+    target_model_dir = model_dir or os.path.join(MODEL_DIR, algo)
+    os.makedirs(target_model_dir, exist_ok=True)
     print(
         f"{prefix}[train] Experiment: {experiment_name} | "
         f"Reward mode: {env.reward_mode} | Sensor noise: {env.sensor_noise_std:.3f} | Seed: {resolved_seed}"
@@ -160,16 +191,16 @@ def train_with_config(
         # Save best model by individual episode reward
         if episode_reward > best_reward:
             best_reward = episode_reward
-            agent.save(os.path.join(target_model_dir, f"{model_prefix}td3_best.pth"))
+            agent.save(os.path.join(target_model_dir, f"{model_prefix}{algo}_best.pth"))
 
         # Save best model by rolling 100-episode average
         if avg_reward_100 > best_reward_per_100:
             best_reward_per_100 = avg_reward_100
-            agent.save(os.path.join(target_model_dir, f"{model_prefix}td3_best_avg100.pth"))
+            agent.save(os.path.join(target_model_dir, f"{model_prefix}{algo}_best_avg100.pth"))
 
         # Periodic checkpoint
         if episode % SAVE_MODEL_EVERY == 0:
-            agent.save(os.path.join(target_model_dir, f"{model_prefix}td3_ep{episode}.pth"))
+            agent.save(os.path.join(target_model_dir, f"{model_prefix}{algo}_ep{episode}.pth"))
 
     print(f"\n{prefix}[train] Training complete.")
     print(f"{prefix}[train] Best episode reward: {best_reward:.2f}")
@@ -178,7 +209,7 @@ def train_with_config(
     env.close()
 
 
-def evaluate(env: CarRacingEnv, agent: TD3Agent, num_episodes: int = 10, 
+def evaluate(env: CarRacingEnv, agent, num_episodes: int = 10, 
              render: bool = True, checkpoint_path: str | None = None,
              preview_path: str | None = None) -> dict:
     """
