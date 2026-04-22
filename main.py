@@ -27,7 +27,7 @@ if HEADLESS:
 import pygame
 import torch
 
-from config import DEFAULT_SEED
+from config import DEFAULT_SEED, MAX_EPISODES, MAX_STEPS_PER_EPISODE
 from ddpg_agent import DDPGAgent
 from environment import CarRacingEnv
 from td3_agent import TD3Agent
@@ -153,14 +153,14 @@ def main():
     parser.add_argument(
         "--max-episodes",
         type=int,
-        default=None,
-        help="Optional override for training episodes (validation/debug)",
+        default=MAX_EPISODES,
+        help=f"Maximum training episodes (default: {MAX_EPISODES})",
     )
     parser.add_argument(
         "--max-steps",
         type=int,
-        default=None,
-        help="Optional override for max steps per training episode (validation/debug)",
+        default=MAX_STEPS_PER_EPISODE,
+        help=f"Maximum steps per training episode (default: {MAX_STEPS_PER_EPISODE})",
     )
     args = parser.parse_args()
 

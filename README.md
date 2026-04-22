@@ -100,17 +100,17 @@ python main.py --algo td3 --mode train
 Useful options:
 ```bash
 python main.py --algo td3 --mode train --headless
-python main.py --algo td3 --mode train --max-episodes 500
+python main.py --algo td3 --mode train --max-episodes 2000 --max-steps 300
 python main.py --algo ddpg --mode train
 ```
 
 ### C. Run Experiments
 ```bash
 # TD3: runs the configured reward/noise grid
-python run_experiments.py --algo td3 --max-episodes 5000 --headless
+python run_experiments.py --algo td3 --max-episodes 2000 --max-steps 300 --headless
 
 # DDPG: run the same grid for comparison
-python run_experiments.py --algo ddpg --max-episodes 5000 --headless
+python run_experiments.py --algo ddpg --max-episodes 2000 --max-steps 300 --headless
 ```
 
 ### D. Plot Results

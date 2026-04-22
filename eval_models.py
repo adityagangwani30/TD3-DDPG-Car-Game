@@ -11,11 +11,11 @@ from pathlib import Path
 import pygame
 import torch
 
-from config import MODEL_DIR
+from config import DEFAULT_SEED, MODEL_DIR
 from environment import CarRacingEnv
 from td3_agent import TD3Agent
 from train import evaluate
-from utils import init_pygame
+from utils import init_pygame, set_global_seed
 
 
 def main():
@@ -44,13 +44,21 @@ def main():
         action="store_true",
         help="Force headless pygame mode",
     )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=DEFAULT_SEED,
+        help=f"Random seed for reproducibility (default: {DEFAULT_SEED})",
+    )
     args = parser.parse_args()
 
     mode_str = "HEADLESS (off-screen)" if args.headless else "GUI (interactive)"
+    set_global_seed(args.seed)
     init_pygame(headless=args.headless)
     device = "cuda" if torch.cuda.is_available() else "cpu"
     print(f"\n[eval] Visualization: {mode_str}")
     print(f"[eval] Using device: {device}\n")
+    print(f"[eval] Seed: {args.seed}\n")
 
     # Find model files
     if "*" in args.model or "?" in args.model:
@@ -79,7 +87,7 @@ def main():
         print(f"Evaluating: {model_file.name}")
         print(f"{'='*60}")
         
-        env = CarRacingEnv(enable_metrics=False, headless=args.headless)
+        env = CarRacingEnv(enable_metrics=False, seed=args.seed, headless=args.headless)
         agent = TD3Agent(device=device)
         
         try:

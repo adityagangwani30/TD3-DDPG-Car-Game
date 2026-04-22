@@ -102,8 +102,24 @@ def sanitize_name(name: str) -> str:
     return safe or "experiment"
 
 
-def _log_file_path(base_log_dir: str, algo: str, experiment_id: str) -> Path:
-    return Path(base_log_dir) / algo / experiment_id / "training_log.jsonl"
+def _experiment_log_dir(base_log_dir: str, algo: str, experiment_id: str) -> Path:
+    return Path(base_log_dir) / algo / experiment_id
+
+
+def _seed_log_files(base_log_dir: str, algo: str, experiment_id: str) -> list[Path]:
+    """Return all available training logs for an experiment (seeded or legacy layout)."""
+    exp_dir = _experiment_log_dir(base_log_dir, algo, experiment_id)
+    if not exp_dir.exists():
+        return []
+
+    legacy_log = exp_dir / "training_log.jsonl"
+    seed_logs = sorted(exp_dir.glob("seed_*/training_log.jsonl"))
+
+    if seed_logs:
+        return [p for p in seed_logs if p.is_file()]
+    if legacy_log.exists():
+        return [legacy_log]
+    return []
 
 
 def load_logs_from_file(log_file: Path) -> list[dict]:
@@ -129,7 +145,11 @@ def discover_experiment_ids(base_log_dir: str, algo: str) -> list[str]:
 
     ids = []
     for child in sorted(algo_dir.iterdir()):
-        if child.is_dir() and (child / "training_log.jsonl").exists():
+        if not child.is_dir():
+            continue
+        has_legacy_log = (child / "training_log.jsonl").exists()
+        has_seed_logs = any(child.glob("seed_*/training_log.jsonl"))
+        if has_legacy_log or has_seed_logs:
             ids.append(child.name)
     return ids
 
@@ -169,11 +189,84 @@ def extract_series(logs: list[dict], rolling_window: int) -> dict[str, np.ndarra
     }
 
 
+def _aggregate_mean_std(series_list: list[np.ndarray]) -> tuple[np.ndarray, np.ndarray]:
+    """Nan-aware mean/std across variable-length series."""
+    if not series_list:
+        return np.array([]), np.array([])
+
+    max_len = max(len(s) for s in series_list)
+    stacked = np.full((len(series_list), max_len), np.nan, dtype=float)
+    for i, s in enumerate(series_list):
+        stacked[i, : len(s)] = s
+
+    mean = np.nanmean(stacked, axis=0)
+    std = np.nanstd(stacked, axis=0)
+    return mean, std
+
+
+def load_experiment_series(
+    base_log_dir: str,
+    algo: str,
+    experiment_id: str,
+    rolling_window: int,
+) -> dict[str, np.ndarray] | None:
+    """Load and aggregate one experiment across all available seed logs."""
+    log_files = _seed_log_files(base_log_dir, algo, experiment_id)
+    if not log_files:
+        return None
+
+    series_per_seed = []
+    for log_file in log_files:
+        logs = load_logs_from_file(log_file)
+        if logs:
+            series_per_seed.append(extract_series(logs, rolling_window=rolling_window))
+
+    if not series_per_seed:
+        return None
+
+    reward_total_mean, reward_total_std = _aggregate_mean_std(
+        [series["reward_total"] for series in series_per_seed]
+    )
+    reward_smooth_mean, reward_smooth_std = _aggregate_mean_std(
+        [series["reward_smooth"] for series in series_per_seed]
+    )
+    crash_total_mean, crash_total_std = _aggregate_mean_std(
+        [series["crash_total"] for series in series_per_seed]
+    )
+    crash_smooth_mean, crash_smooth_std = _aggregate_mean_std(
+        [series["crash_smooth"] for series in series_per_seed]
+    )
+    laps_total_mean, laps_total_std = _aggregate_mean_std(
+        [series["laps_total"] for series in series_per_seed]
+    )
+    laps_smooth_mean, laps_smooth_std = _aggregate_mean_std(
+        [series["laps_smooth"] for series in series_per_seed]
+    )
+
+    episodes = np.arange(1, len(reward_total_mean) + 1)
+    return {
+        "episodes": episodes,
+        "reward_total": reward_total_mean,
+        "reward_total_std": reward_total_std,
+        "reward_smooth": reward_smooth_mean,
+        "reward_smooth_std": reward_smooth_std,
+        "crash_total": crash_total_mean,
+        "crash_total_std": crash_total_std,
+        "crash_smooth": crash_smooth_mean,
+        "crash_smooth_std": crash_smooth_std,
+        "laps_total": laps_total_mean,
+        "laps_total_std": laps_total_std,
+        "laps_smooth": laps_smooth_mean,
+        "laps_smooth_std": laps_smooth_std,
+    }
+
+
 def _plot_series_with_smoothing(
     ax,
     episodes: np.ndarray,
     raw_values: np.ndarray,
     smooth_values: np.ndarray,
+    smooth_std: np.ndarray | None,
     color: str,
     ylabel: str,
     label: str,
@@ -203,6 +296,16 @@ def _plot_series_with_smoothing(
         label=smooth_label or label,
         zorder=3,
     )
+    if smooth_std is not None and len(smooth_std) == len(smooth_values):
+        ax.fill_between(
+            episodes,
+            smooth_values - smooth_std,
+            smooth_values + smooth_std,
+            color=color,
+            alpha=0.15,
+            linewidth=0,
+            zorder=2,
+        )
 
     if highlight_peak and len(episodes) and len(smooth_values):
         peak_idx = int(np.argmax(smooth_values))
@@ -250,27 +353,29 @@ def highlight_convergence(ax, episodes: np.ndarray, smoothed_reward: np.ndarray)
 def plot_individual_experiment(
     algo: str,
     experiment_id: str,
-    logs: list[dict],
+    series: dict[str, np.ndarray],
     output_dir: str,
     window: int,
     smooth: bool,
 ):
     """Generate reward, crash, and laps plots for one algorithm experiment."""
-    if not logs:
+    if not series:
         print(f"[plot][warn] Missing or empty logs for {algo}/{experiment_id}. Skipping.")
         return
 
     apply_styling()
     os.makedirs(output_dir, exist_ok=True)
-    series = extract_series(logs, rolling_window=window)
 
     episodes = series["episodes"]
     reward_raw = series["reward_total"]
     reward_smooth = series["reward_smooth"]
+    reward_smooth_std = series.get("reward_smooth_std")
     crash_raw = series["crash_total"]
     crash_smooth = series["crash_smooth"]
+    crash_smooth_std = series.get("crash_smooth_std")
     laps_raw = series["laps_total"]
     laps_smooth = series["laps_smooth"]
+    laps_smooth_std = series.get("laps_smooth_std")
     color = ALGO_COLORS[algo]
     label_name = format_experiment_label(experiment_id)
 
@@ -284,6 +389,7 @@ def plot_individual_experiment(
         episodes,
         reward_raw,
         reward_smooth,
+        reward_smooth_std,
         color=color,
         ylabel="Reward",
         label=label_name,
@@ -306,6 +412,7 @@ def plot_individual_experiment(
         episodes,
         crash_raw,
         crash_smooth,
+        crash_smooth_std,
         color=color,
         ylabel="Collisions",
         label=label_name,
@@ -327,6 +434,7 @@ def plot_individual_experiment(
         episodes,
         laps_raw,
         laps_smooth,
+        laps_smooth_std,
         color=color,
         ylabel="Laps completed",
         label=label_name,
@@ -433,15 +541,22 @@ def plot_algo_comparisons(base_log_dir: str, experiment_ids: list[str], output_d
     ddpg_laps_all = []
 
     for exp_id in experiment_ids:
-        td3_logs = load_logs_from_file(_log_file_path(base_log_dir, "td3", exp_id))
-        ddpg_logs = load_logs_from_file(_log_file_path(base_log_dir, "ddpg", exp_id))
+        td3_series = load_experiment_series(
+            base_log_dir=base_log_dir,
+            algo="td3",
+            experiment_id=exp_id,
+            rolling_window=window,
+        )
+        ddpg_series = load_experiment_series(
+            base_log_dir=base_log_dir,
+            algo="ddpg",
+            experiment_id=exp_id,
+            rolling_window=window,
+        )
 
-        if not td3_logs or not ddpg_logs:
+        if td3_series is None or ddpg_series is None:
             print(f"[plot][warn] Missing TD3/DDPG pair for {exp_id}. Skipping per-experiment comparison.")
             continue
-
-        td3_series = extract_series(td3_logs, rolling_window=window)
-        ddpg_series = extract_series(ddpg_logs, rolling_window=window)
 
         td3_reward_all.append(td3_series["reward_smooth"])
         ddpg_reward_all.append(ddpg_series["reward_smooth"])
@@ -618,17 +733,21 @@ def main():
 
     plotted = 0
     for exp_id in experiment_ids:
-        log_file = _log_file_path(args.log_dir, algo, exp_id)
-        logs = load_logs_from_file(log_file)
-        if not logs:
-            print(f"[plot][warn] Missing logs file: {log_file}")
+        series = load_experiment_series(
+            base_log_dir=args.log_dir,
+            algo=algo,
+            experiment_id=exp_id,
+            rolling_window=window,
+        )
+        if series is None:
+            print(f"[plot][warn] Missing logs for: {algo}/{exp_id}")
             continue
 
         out_dir = os.path.join(args.individual_output, algo, "individual", sanitize_name(exp_id))
         plot_individual_experiment(
             algo=algo,
             experiment_id=exp_id,
-            logs=logs,
+            series=series,
             output_dir=out_dir,
             window=window,
             smooth=args.smooth,
