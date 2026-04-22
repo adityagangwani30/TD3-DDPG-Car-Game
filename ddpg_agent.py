@@ -91,7 +91,11 @@ class DDPGAgent:
         """Choose an action for the current state with optional exploration noise."""
         state_t = torch.as_tensor(state, dtype=torch.float32, device=self.device).unsqueeze(0)
         with torch.no_grad():
-            action = self.actor(state_t).cpu().numpy().flatten()
+            action_t = self.actor(state_t)
+            # Skip .cpu() transfer when already on CPU
+            if self.device.type != "cpu":
+                action_t = action_t.cpu()
+            action = action_t.numpy().flatten()
 
         if add_noise:
             noise = np.random.normal(0, noise_scale, size=ACTION_DIM)
@@ -117,14 +121,14 @@ class DDPGAgent:
         current_q = self.critic(state, action)
         critic_loss = F.mse_loss(current_q, target_q)
 
-        self.critic_optimizer.zero_grad()
+        self.critic_optimizer.zero_grad(set_to_none=True)
         critic_loss.backward()
         torch.nn.utils.clip_grad_norm_(self.critic.parameters(), max_norm=GRADIENT_CLIP_MAX_NORM)
         self.critic_optimizer.step()
 
         actor_loss = -self.critic(state, self.actor(state)).mean()
 
-        self.actor_optimizer.zero_grad()
+        self.actor_optimizer.zero_grad(set_to_none=True)
         actor_loss.backward()
         torch.nn.utils.clip_grad_norm_(self.actor.parameters(), max_norm=GRADIENT_CLIP_MAX_NORM)
         self.actor_optimizer.step()

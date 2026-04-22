@@ -168,9 +168,10 @@ class CarRacingEnv:
 
     def _parse_action(self, action: np.ndarray) -> tuple[float, float]:
         """Parse action to steering and throttle. Both in [-1, 1] and [0, 1] respectively."""
-        steering = float(np.clip(action[0], -1.0, 1.0))
+        # Use Python builtins for scalar clipping (faster than np.clip for scalars)
+        steering = max(-1.0, min(1.0, float(action[0])))
         # Throttle: clip to [0, 1] for forward motion only
-        throttle = float(np.clip(action[1], 0.0, 1.0))
+        throttle = max(0.0, min(1.0, float(action[1])))
         return steering, throttle
 
     def _compute_reward(self, steering: float, done: bool, lap_completed: bool) -> float:
@@ -298,6 +299,10 @@ class CarRacingEnv:
         In headless mode: Renders to off-screen surface only.
         In GUI mode: Handles events and displays window.
         """
+        # Fast path: skip all work in headless mode when rendering is disabled
+        if self.headless and not enabled:
+            return
+
         # Handle GUI events only in non-headless mode
         if not self.headless:
             for event in pygame.event.get():

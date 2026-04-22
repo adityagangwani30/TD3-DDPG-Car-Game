@@ -156,7 +156,7 @@ def run_all_experiments(
         sensor_noise_std = cfg["sensor_noise_std"]
         tag = _experiment_tag(reward_mode, sensor_noise_std)
         experiment_id = f"{algo}_{tag}"
-        scheduled_runs.append((algo, experiment_id, experiment_name, cfg))
+        scheduled_runs.append((algo, experiment_id, experiment_name, cfg, tag))
 
     scheduled_runs = scheduled_runs[start_index:]
     if max_experiments is not None:
@@ -188,10 +188,9 @@ def run_all_experiments(
             batch_number = 3 if start_index < max_experiments else 4
 
     interrupted = False
-    for index, (algo, experiment_id, experiment_name, cfg) in enumerate(scheduled_runs, start=1):
+    for index, (algo, experiment_id, experiment_name, cfg, tag) in enumerate(scheduled_runs, start=1):
         reward_mode = cfg["reward_mode"]
         sensor_noise_std = cfg["sensor_noise_std"]
-        tag = _experiment_tag(reward_mode, sensor_noise_std)
 
         for current_seed in active_seeds:
             seed_tag = _seed_tag(current_seed)

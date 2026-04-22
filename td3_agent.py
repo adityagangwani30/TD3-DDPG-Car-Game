@@ -115,7 +115,11 @@ class TD3Agent:
         """Choose an action for the current state with optional exploration noise."""
         state_t = torch.as_tensor(state, dtype=torch.float32, device=self.device).unsqueeze(0)
         with torch.no_grad():
-            action = self.actor(state_t).cpu().numpy().flatten()
+            action_t = self.actor(state_t)
+            # Skip .cpu() transfer when already on CPU
+            if self.device.type != "cpu":
+                action_t = action_t.cpu()
+            action = action_t.numpy().flatten()
 
         if add_noise:
             noise = np.random.normal(0, noise_scale, size=ACTION_DIM)
@@ -146,7 +150,7 @@ class TD3Agent:
         current_q1, current_q2 = self.critic(state, action)
         critic_loss = F.mse_loss(current_q1, target_q) + F.mse_loss(current_q2, target_q)
 
-        self.critic_optimizer.zero_grad()
+        self.critic_optimizer.zero_grad(set_to_none=True)
         critic_loss.backward()
         torch.nn.utils.clip_grad_norm_(self.critic.parameters(), max_norm=GRADIENT_CLIP_MAX_NORM)
         self.critic_optimizer.step()
@@ -154,7 +158,7 @@ class TD3Agent:
         if self.total_it % POLICY_DELAY == 0:
             actor_loss = -self.critic.q1_forward(state, self.actor(state)).mean()
 
-            self.actor_optimizer.zero_grad()
+            self.actor_optimizer.zero_grad(set_to_none=True)
             actor_loss.backward()
             torch.nn.utils.clip_grad_norm_(self.actor.parameters(), max_norm=GRADIENT_CLIP_MAX_NORM)
             self.actor_optimizer.step()
