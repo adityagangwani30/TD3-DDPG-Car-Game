@@ -75,3 +75,11 @@ logs/
 .coverage
 htmlcov/
 .pytest_cache/
+
+.env
+
+# ==============================
+# Report generation artifacts
+# ==============================
+generate_td3_ddpg_report.py
+results/td3_ddpg_report.pdf

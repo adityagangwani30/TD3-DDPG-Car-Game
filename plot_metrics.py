@@ -504,7 +504,8 @@ def _plot_two_algo_metric(
         label="DDPG",
         zorder=3,
     )
-    highlight_convergence(ax, td3_series["episodes"], td3_series["reward_smooth"])
+    convergence_series = td3_series.get("reward_smooth", td3_series.get(key, np.array([])))
+    highlight_convergence(ax, td3_series["episodes"], convergence_series)
     ax.set_xlabel("Episodes", fontsize=13)
     ax.set_ylabel(ylabel, fontsize=13)
     ax.legend(loc="best", frameon=False)
