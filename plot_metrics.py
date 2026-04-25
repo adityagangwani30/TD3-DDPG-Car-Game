@@ -287,6 +287,26 @@ def _set_plot_labels(ax, title: str, ylabel: str):
     ax.margins(x=0.02)
 
 
+def _experiment_sort_key(experiment_id: str) -> tuple[int, int, str]:
+    match = re.search(r"r(\d+)_n(\d+)", str(experiment_id).lower())
+    if match:
+        return int(match.group(1)), int(match.group(2)), str(experiment_id)
+    return 99, 99, str(experiment_id)
+
+
+def _sorted_experiment_ids(experiment_ids: list[str]) -> list[str]:
+    return sorted({str(exp).strip() for exp in experiment_ids}, key=_experiment_sort_key)
+
+
+def _experiment_color_map(experiment_ids: list[str]) -> dict[str, str]:
+    ordered_ids = _sorted_experiment_ids(experiment_ids)
+    if not ordered_ids:
+        return {}
+
+    cmap = plt.get_cmap("tab20", len(ordered_ids))
+    return {experiment_id: cmap(index) for index, experiment_id in enumerate(ordered_ids)}
+
+
 def find_convergence_episode(episodes: np.ndarray, smoothed_reward: np.ndarray) -> int | None:
     """Estimate the episode where the reward curve stabilizes."""
     if len(episodes) < 10 or len(smoothed_reward) < 10:
@@ -330,6 +350,93 @@ def add_convergence_marker(ax, episodes: np.ndarray, smoothed_reward: np.ndarray
         label="Convergence",
         zorder=4,
     )
+
+
+def _plot_aggregate_experiment_grid(
+    algo: str,
+    experiment_series: dict[str, dict[str, np.ndarray]],
+    output_dir: str,
+    window: int,
+):
+    """Plot all experiment curves for one algorithm across reward, crash, and laps."""
+    if not experiment_series:
+        print(f"[plot][warn] No {algo.upper()} experiment series available for aggregate plots.")
+        return
+
+    os.makedirs(output_dir, exist_ok=True)
+    apply_styling()
+
+    colors = _experiment_color_map(list(experiment_series.keys()))
+    ordered_experiments = _sorted_experiment_ids(list(experiment_series.keys()))
+
+    metric_specs = [
+        (
+            "reward_plot",
+            "Average Reward",
+            f"{algo.upper()} Performance Across All Experiments (Reward)",
+            os.path.join(output_dir, f"{algo}_reward_all.png"),
+        ),
+        (
+            "crash_plot",
+            "Crash Rate (%)",
+            f"{algo.upper()} Crash Rate Comparison Across Experiments",
+            os.path.join(output_dir, f"{algo}_crash_all.png"),
+        ),
+        (
+            "laps_plot",
+            "Laps per Episode",
+            f"{algo.upper()} Laps Comparison Across Experiments",
+            os.path.join(output_dir, f"{algo}_laps_all.png"),
+        ),
+    ]
+
+    for metric_key, ylabel, title, output_path in metric_specs:
+        fig, ax = plt.subplots(figsize=(10, 6))
+        for experiment_id in ordered_experiments:
+            series = experiment_series[experiment_id]
+            mean_values = series[metric_key]
+            std_values = series.get(f"{metric_key}_std")
+            label = format_experiment_label(experiment_id)
+            color = colors.get(experiment_id, "#333333")
+            ax.plot(
+                series["episodes"],
+                mean_values,
+                color=color,
+                linewidth=2.0,
+                alpha=0.95,
+                label=label,
+                zorder=3,
+            )
+            if std_values is not None and len(std_values) == len(mean_values):
+                ax.fill_between(
+                    series["episodes"],
+                    mean_values - std_values,
+                    mean_values + std_values,
+                    color=color,
+                    alpha=0.08,
+                    linewidth=0,
+                    zorder=2,
+                )
+
+        ax.set_title(title)
+        ax.set_xlabel("Episodes", fontsize=FONT_SIZE)
+        ax.set_ylabel(ylabel, fontsize=FONT_SIZE)
+        ax.tick_params(axis="both", labelsize=FONT_SIZE)
+        ax.margins(x=0.02)
+        ax.legend(
+            loc="upper center",
+            bbox_to_anchor=(0.5, -0.16),
+            ncol=4,
+            fontsize=9,
+            frameon=True,
+            facecolor="white",
+            framealpha=0.95,
+            edgecolor="#d0d0d0",
+        )
+        fig.tight_layout(rect=(0, 0.08, 1, 1))
+        fig.savefig(output_path, dpi=PLOT_DPI, bbox_inches="tight", pad_inches=0.08)
+        plt.close(fig)
+        print(f"[plot] Saved: {output_path}")
 
 
 def plot_individual_experiment(
@@ -601,6 +708,49 @@ def plot_algo_comparisons(base_log_dir: str, experiment_ids: list[str], output_d
     print(f"[plot] Saved: {os.path.join(output_dir, 'td3_vs_ddpg_laps.png')}")
 
 
+def plot_all_experiment_aggregates(
+    base_log_dir: str,
+    experiment_ids: list[str],
+    output_dir: str,
+    window: int,
+):
+    """Generate aggregate TD3 and DDPG plots across all experiments."""
+    ordered_experiments = _sorted_experiment_ids(experiment_ids)
+    if not ordered_experiments:
+        print("[plot][warn] No experiments available for aggregate plotting.")
+        return
+
+    os.makedirs(output_dir, exist_ok=True)
+
+    for algo in ALGORITHMS:
+        algo_series: dict[str, dict[str, np.ndarray]] = {}
+        for exp_id in ordered_experiments:
+            series = load_experiment_series(
+                base_log_dir=base_log_dir,
+                algo=algo,
+                experiment_id=exp_id,
+                rolling_window=window,
+            )
+            if series is None:
+                continue
+            algo_series[exp_id] = {
+                **series,
+                "reward_plot": series["reward_smooth"],
+                "reward_plot_std": series["reward_total_std"],
+                "crash_plot": series["crash_smooth"],
+                "crash_plot_std": series["crash_total_std"],
+                "laps_plot": series["laps_smooth"],
+                "laps_plot_std": series["laps_total_std"],
+            }
+
+        _plot_aggregate_experiment_grid(
+            algo=algo,
+            experiment_series=algo_series,
+            output_dir=output_dir,
+            window=window,
+        )
+
+
 def main():
     parser = argparse.ArgumentParser(description="Plot TD3/DDPG training metrics")
     parser.add_argument(
@@ -649,6 +799,12 @@ def main():
         default=os.path.join("results", "plots", "comparison"),
         help="Output directory for TD3 vs DDPG plots (default: results/plots/comparison)",
     )
+    parser.add_argument(
+        "--aggregate-output",
+        type=str,
+        default=os.path.join("results", "aggregate"),
+        help="Output directory for TD3/DDPG aggregate experiment plots (default: results/aggregate)",
+    )
     args = parser.parse_args()
 
     window = max(1, int(args.window))
@@ -674,6 +830,12 @@ def main():
             output_dir=args.comparison_output,
             window=window,
             smooth=args.smooth,
+        )
+        plot_all_experiment_aggregates(
+            base_log_dir=args.log_dir,
+            experiment_ids=experiment_ids,
+            output_dir=args.aggregate_output,
+            window=window,
         )
         print(f"[plot] Comparison mode complete for up to {len(experiment_ids)} experiments.")
         return
