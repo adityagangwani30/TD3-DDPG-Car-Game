@@ -13,12 +13,10 @@ from config import LOGS_DIR
 
 
 PLOT_DPI = 300
-FONT_SIZE = 13
-TITLE_SIZE = 15
+FONT_SIZE = 12
+TITLE_SIZE = 14
 LEGEND_SIZE = 11
 LINE_WIDTH = 2.5
-RAW_LINE_WIDTH = 1.0
-MARKER_SIZE = 5
 
 ALGORITHMS = ("td3", "ddpg")
 ALGO_COLORS = {
@@ -46,8 +44,9 @@ def apply_styling():
             "font.family": "DejaVu Serif",
             "font.size": FONT_SIZE,
             "axes.labelsize": FONT_SIZE,
-            "xtick.labelsize": 11,
-            "ytick.labelsize": 11,
+            "xtick.labelsize": FONT_SIZE,
+            "ytick.labelsize": FONT_SIZE,
+            "axes.titlesize": TITLE_SIZE,
             "legend.fontsize": LEGEND_SIZE,
             "figure.facecolor": "white",
             "axes.facecolor": "white",
@@ -60,17 +59,20 @@ def apply_styling():
     )
 
 
-def rolling_mean(values: list[float], window: int) -> np.ndarray:
-    """Compute rolling mean with a small-sample fallback for early episodes."""
-    if not values:
-        return np.array([])
+def rolling_mean(values: list[float] | np.ndarray, window: int) -> np.ndarray:
+    """Compute a NaN-aware moving average with a small-sample fallback."""
     arr = np.asarray(values, dtype=float)
-    if len(arr) < window:
-        return np.array([np.mean(arr[: i + 1]) for i in range(len(arr))], dtype=float)
-    kernel = np.ones(window, dtype=float) / float(window)
-    core = np.convolve(arr, kernel, mode="valid")
-    warmup = np.array([np.mean(arr[: i + 1]) for i in range(window - 1)], dtype=float)
-    return np.concatenate([warmup, core])
+    if arr.size == 0:
+        return np.array([])
+
+    window = max(1, int(window))
+    smoothed = np.empty_like(arr, dtype=float)
+    for idx in range(arr.size):
+        start = max(0, idx - window + 1)
+        window_values = arr[start : idx + 1]
+        finite_values = window_values[np.isfinite(window_values)]
+        smoothed[idx] = float(np.mean(finite_values)) if finite_values.size else np.nan
+    return smoothed
 
 
 def format_experiment_label(experiment_name: str) -> str:
@@ -161,31 +163,18 @@ def resolve_experiment_ids(base_log_dir: str, algo: str, experiment_args: list[s
     return discover_experiment_ids(base_log_dir, algo)
 
 
-def extract_series(logs: list[dict], rolling_window: int) -> dict[str, np.ndarray]:
-    """Extract robust metric series for plotting."""
+def extract_series(logs: list[dict]) -> dict[str, np.ndarray]:
+    """Extract raw metric series for plotting."""
     episodes = np.array([int(log.get("episode", i + 1)) for i, log in enumerate(logs)], dtype=int)
     reward_total = np.array([float(log.get("reward_total", 0.0)) for log in logs], dtype=float)
     crashes = np.array([float(log.get("collisions", 0.0)) for log in logs], dtype=float)
     laps = np.array([float(log.get("laps_completed", 0.0)) for log in logs], dtype=float)
 
-    reward_smooth = np.array(
-        [float(log.get("reward_rolling_avg_100", 0.0)) for log in logs],
-        dtype=float,
-    )
-    if not np.any(reward_smooth):
-        reward_smooth = rolling_mean(reward_total.tolist(), rolling_window)
-
-    crash_smooth = rolling_mean(crashes.tolist(), rolling_window)
-    laps_smooth = rolling_mean(laps.tolist(), rolling_window)
-
     return {
         "episodes": episodes,
         "reward_total": reward_total,
-        "reward_smooth": reward_smooth,
         "crash_total": crashes,
-        "crash_smooth": crash_smooth,
         "laps_total": laps,
-        "laps_smooth": laps_smooth,
     }
 
 
@@ -219,7 +208,7 @@ def load_experiment_series(
     for log_file in log_files:
         logs = load_logs_from_file(log_file)
         if logs:
-            series_per_seed.append(extract_series(logs, rolling_window=rolling_window))
+            series_per_seed.append(extract_series(logs))
 
     if not series_per_seed:
         return None
@@ -227,21 +216,16 @@ def load_experiment_series(
     reward_total_mean, reward_total_std = _aggregate_mean_std(
         [series["reward_total"] for series in series_per_seed]
     )
-    reward_smooth_mean, reward_smooth_std = _aggregate_mean_std(
-        [series["reward_smooth"] for series in series_per_seed]
-    )
     crash_total_mean, crash_total_std = _aggregate_mean_std(
         [series["crash_total"] for series in series_per_seed]
-    )
-    crash_smooth_mean, crash_smooth_std = _aggregate_mean_std(
-        [series["crash_smooth"] for series in series_per_seed]
     )
     laps_total_mean, laps_total_std = _aggregate_mean_std(
         [series["laps_total"] for series in series_per_seed]
     )
-    laps_smooth_mean, laps_smooth_std = _aggregate_mean_std(
-        [series["laps_smooth"] for series in series_per_seed]
-    )
+
+    reward_smooth_mean = rolling_mean(reward_total_mean, rolling_window)
+    crash_smooth_mean = rolling_mean(crash_total_mean, rolling_window)
+    laps_smooth_mean = rolling_mean(laps_total_mean, rolling_window)
 
     episodes = np.arange(1, len(reward_total_mean) + 1)
     return {
@@ -249,83 +233,64 @@ def load_experiment_series(
         "reward_total": reward_total_mean,
         "reward_total_std": reward_total_std,
         "reward_smooth": reward_smooth_mean,
-        "reward_smooth_std": reward_smooth_std,
         "crash_total": crash_total_mean,
         "crash_total_std": crash_total_std,
         "crash_smooth": crash_smooth_mean,
-        "crash_smooth_std": crash_smooth_std,
         "laps_total": laps_total_mean,
         "laps_total_std": laps_total_std,
         "laps_smooth": laps_smooth_mean,
-        "laps_smooth_std": laps_smooth_std,
     }
 
 
-def _plot_series_with_smoothing(
+def _plot_mean_with_std(
     ax,
     episodes: np.ndarray,
-    raw_values: np.ndarray,
-    smooth_values: np.ndarray,
-    smooth_std: np.ndarray | None,
+    mean_values: np.ndarray,
+    std_values: np.ndarray | None,
     color: str,
-    ylabel: str,
     label: str,
-    raw_label: str | None = None,
-    smooth_label: str | None = None,
-    highlight_peak: bool = False,
 ):
-    """Plot raw and smoothed series with consistent styling."""
+    """Plot a mean curve with an optional standard-deviation band."""
     ax.plot(
         episodes,
-        raw_values,
-        linewidth=RAW_LINE_WIDTH,
-        color=color,
-        alpha=0.25,
-        label=raw_label,
-        zorder=1,
-    )
-    ax.plot(
-        episodes,
-        smooth_values,
+        mean_values,
         linewidth=LINE_WIDTH,
         color=color,
-        alpha=0.95,
-        marker="o",
-        markersize=MARKER_SIZE,
-        markevery=max(1, len(episodes) // 25),
-        label=smooth_label or label,
+        alpha=0.98,
+        label=label,
         zorder=3,
     )
-    if smooth_std is not None and len(smooth_std) == len(smooth_values):
+    if std_values is not None and len(std_values) == len(mean_values):
         ax.fill_between(
             episodes,
-            smooth_values - smooth_std,
-            smooth_values + smooth_std,
+            mean_values - std_values,
+            mean_values + std_values,
             color=color,
-            alpha=0.15,
+            alpha=0.18,
             linewidth=0,
             zorder=2,
         )
 
-    if highlight_peak and len(episodes) and len(smooth_values):
-        peak_idx = int(np.argmax(smooth_values))
-        peak_x = episodes[peak_idx]
-        peak_y = smooth_values[peak_idx]
-        ax.scatter(peak_x, peak_y, s=90, color=color, marker="*", zorder=5)
-        ax.annotate(
-            "peak",
-            xy=(peak_x, peak_y),
-            xytext=(6, 6),
-            textcoords="offset points",
-            fontsize=10,
-            color=color,
-        )
+
+def _format_plot_title(metric_name: str, context_label: str | None = None) -> str:
+    title = f"{metric_name} vs Episodes"
+    if context_label:
+        return f"{title} ({context_label})"
+    return title
 
 
-def highlight_convergence(ax, episodes: np.ndarray, smoothed_reward: np.ndarray):
-    """Shade a likely convergence region based on low rolling variance."""
+def _set_plot_labels(ax, title: str, ylabel: str):
+    ax.set_title(title)
+    ax.set_xlabel("Episodes", fontsize=FONT_SIZE)
+    ax.set_ylabel(ylabel, fontsize=FONT_SIZE)
+    ax.tick_params(axis="both", labelsize=FONT_SIZE)
+    ax.margins(x=0.02)
+
+
+def find_convergence_episode(episodes: np.ndarray, smoothed_reward: np.ndarray) -> int | None:
+    """Estimate the episode where the reward curve stabilizes."""
     if len(episodes) < 10 or len(smoothed_reward) < 10:
-        return
+        return None
 
     window = max(10, min(25, len(smoothed_reward) // 8))
     rolling_std = np.array(
@@ -347,7 +312,24 @@ def highlight_convergence(ax, episodes: np.ndarray, smoothed_reward: np.ndarray)
         start_idx = int(len(episodes) * 0.7)
 
     start_idx = max(0, min(start_idx, len(episodes) - 1))
-    ax.axvspan(episodes[start_idx], episodes[-1], alpha=0.10, color="grey")
+    return int(episodes[start_idx])
+
+
+def add_convergence_marker(ax, episodes: np.ndarray, smoothed_reward: np.ndarray):
+    """Add a dashed convergence line to a reward plot."""
+    convergence_episode = find_convergence_episode(episodes, smoothed_reward)
+    if convergence_episode is None:
+        return
+
+    ax.axvline(
+        convergence_episode,
+        color="#4d4d4d",
+        linestyle="--",
+        linewidth=1.6,
+        alpha=0.95,
+        label="Convergence",
+        zorder=4,
+    )
 
 
 def plot_individual_experiment(
@@ -367,87 +349,66 @@ def plot_individual_experiment(
     os.makedirs(output_dir, exist_ok=True)
 
     episodes = series["episodes"]
-    reward_raw = series["reward_total"]
-    reward_smooth = series["reward_smooth"]
-    reward_smooth_std = series.get("reward_smooth_std")
-    crash_raw = series["crash_total"]
-    crash_smooth = series["crash_smooth"]
-    crash_smooth_std = series.get("crash_smooth_std")
-    laps_raw = series["laps_total"]
-    laps_smooth = series["laps_smooth"]
-    laps_smooth_std = series.get("laps_smooth_std")
+    reward_mean = series["reward_smooth"]
+    reward_std = series.get("reward_total_std")
+    crash_mean = series["crash_smooth"]
+    crash_std = series.get("crash_total_std")
+    laps_mean = series["laps_smooth"]
+    laps_std = series.get("laps_total_std")
     color = ALGO_COLORS[algo]
     label_name = format_experiment_label(experiment_id)
+    reward_title = _format_plot_title("Reward", label_name)
+    crash_title = _format_plot_title("Crash Rate", label_name)
+    laps_title = _format_plot_title("Laps per Episode", label_name)
 
     reward_path = os.path.join(output_dir, "reward_vs_episodes.png")
     crash_path = os.path.join(output_dir, "crash_rate_vs_episodes.png")
     laps_path = os.path.join(output_dir, "laps_vs_episodes.png")
 
-    fig, ax = plt.subplots(figsize=(10.4, 5.8))
-    _plot_series_with_smoothing(
+    fig, ax = plt.subplots(figsize=(8, 5))
+    _plot_mean_with_std(
         ax,
         episodes,
-        reward_raw,
-        reward_smooth,
-        reward_smooth_std,
+        reward_mean,
+        reward_std,
         color=color,
-        ylabel="Reward",
         label=label_name,
-        raw_label=f"{label_name} raw",
-        smooth_label=f"{label_name} smoothed",
-        highlight_peak=True,
     )
-    highlight_convergence(ax, episodes, reward_smooth)
-    ax.set_xlabel("Episodes", fontsize=13)
-    ax.set_ylabel("Reward", fontsize=13)
-    ax.legend(loc="best", frameon=False)
-    ax.tick_params(axis="both", labelsize=11)
+    add_convergence_marker(ax, episodes, reward_mean)
+    _set_plot_labels(ax, reward_title, "Average Reward")
+    ax.legend(loc="best", frameon=True, facecolor="white", framealpha=0.95, edgecolor="#d0d0d0")
     fig.tight_layout()
-    fig.savefig(reward_path, dpi=PLOT_DPI, bbox_inches="tight")
+    fig.savefig(reward_path, dpi=PLOT_DPI, bbox_inches="tight", pad_inches=0.08)
     plt.close(fig)
 
-    fig, ax = plt.subplots(figsize=(10.4, 5.8))
-    _plot_series_with_smoothing(
+    fig, ax = plt.subplots(figsize=(8, 5))
+    _plot_mean_with_std(
         ax,
         episodes,
-        crash_raw,
-        crash_smooth,
-        crash_smooth_std,
+        crash_mean,
+        crash_std,
         color=color,
-        ylabel="Collisions",
         label=label_name,
-        raw_label=f"{label_name} raw",
-        smooth_label=f"{label_name} smoothed",
     )
-    highlight_convergence(ax, episodes, reward_smooth)
-    ax.set_xlabel("Episodes", fontsize=13)
-    ax.set_ylabel("Collisions", fontsize=13)
-    ax.legend(loc="best", frameon=False)
-    ax.tick_params(axis="both", labelsize=11)
+    _set_plot_labels(ax, crash_title, "Crash Rate (%)")
+    ax.legend(loc="best", frameon=True, facecolor="white", framealpha=0.95, edgecolor="#d0d0d0")
     fig.tight_layout()
-    fig.savefig(crash_path, dpi=PLOT_DPI, bbox_inches="tight")
+    fig.savefig(crash_path, dpi=PLOT_DPI, bbox_inches="tight", pad_inches=0.08)
     plt.close(fig)
 
-    fig, ax = plt.subplots(figsize=(10.4, 5.8))
-    _plot_series_with_smoothing(
+    fig, ax = plt.subplots(figsize=(8, 5))
+    _plot_mean_with_std(
         ax,
         episodes,
-        laps_raw,
-        laps_smooth,
-        laps_smooth_std,
+        laps_mean,
+        laps_std,
         color=color,
-        ylabel="Laps completed",
         label=label_name,
-        raw_label=f"{label_name} raw",
-        smooth_label=f"{label_name} smoothed",
     )
-    highlight_convergence(ax, episodes, reward_smooth)
-    ax.set_xlabel("Episodes", fontsize=13)
-    ax.set_ylabel("Laps completed", fontsize=13)
-    ax.legend(loc="best", frameon=False)
-    ax.tick_params(axis="both", labelsize=11)
+    _set_plot_labels(ax, laps_title, "Laps per Episode")
+    ax.legend(loc="best", frameon=True, facecolor="white", framealpha=0.95, edgecolor="#d0d0d0")
     fig.tight_layout()
-    fig.savefig(laps_path, dpi=PLOT_DPI, bbox_inches="tight")
+    fig.savefig(laps_path, dpi=PLOT_DPI, bbox_inches="tight", pad_inches=0.08)
     plt.close(fig)
 
     print(f"[plot] Saved: {reward_path}")
@@ -460,58 +421,35 @@ def _plot_two_algo_metric(
     ddpg_series: dict[str, np.ndarray],
     key: str,
     ylabel: str,
+    title: str,
     output_path: str,
 ):
     """Plot TD3 vs DDPG for a single metric key."""
-    fig, ax = plt.subplots(figsize=(10.5, 6.0))
-    ax.plot(
-        td3_series["episodes"],
-        td3_series[f"{key}_raw"],
-        color=ALGO_COLORS["td3"],
-        linewidth=RAW_LINE_WIDTH,
-        alpha=0.25,
-        label=None,
-        zorder=1,
-    )
-    ax.plot(
+    fig, ax = plt.subplots(figsize=(8, 5))
+    td3_std = td3_series.get(f"{key}_std")
+    ddpg_std = ddpg_series.get(f"{key}_std")
+    _plot_mean_with_std(
+        ax,
         td3_series["episodes"],
         td3_series[key],
+        td3_std,
         color=ALGO_COLORS["td3"],
-        linewidth=LINE_WIDTH,
-        marker="o",
-        markersize=MARKER_SIZE,
-        markevery=max(1, len(td3_series["episodes"]) // 25),
         label="TD3",
-        zorder=3,
     )
-    ax.plot(
-        ddpg_series["episodes"],
-        ddpg_series[f"{key}_raw"],
-        color=ALGO_COLORS["ddpg"],
-        linewidth=RAW_LINE_WIDTH,
-        alpha=0.25,
-        label=None,
-        zorder=1,
-    )
-    ax.plot(
+    _plot_mean_with_std(
+        ax,
         ddpg_series["episodes"],
         ddpg_series[key],
+        ddpg_std,
         color=ALGO_COLORS["ddpg"],
-        linewidth=LINE_WIDTH,
-        marker="s",
-        markersize=MARKER_SIZE,
-        markevery=max(1, len(ddpg_series["episodes"]) // 25),
         label="DDPG",
-        zorder=3,
     )
-    convergence_series = td3_series.get("reward_smooth", td3_series.get(key, np.array([])))
-    highlight_convergence(ax, td3_series["episodes"], convergence_series)
-    ax.set_xlabel("Episodes", fontsize=13)
-    ax.set_ylabel(ylabel, fontsize=13)
-    ax.legend(loc="best", frameon=False)
-    ax.tick_params(axis="both", labelsize=11)
+    _set_plot_labels(ax, title, ylabel)
+    if key == "reward_plot":
+        add_convergence_marker(ax, td3_series["episodes"], td3_series[key])
+    ax.legend(loc="best", frameon=True, facecolor="white", framealpha=0.95, edgecolor="#d0d0d0")
     fig.tight_layout()
-    fig.savefig(output_path, dpi=PLOT_DPI, bbox_inches="tight")
+    fig.savefig(output_path, dpi=PLOT_DPI, bbox_inches="tight", pad_inches=0.08)
     plt.close(fig)
 
 
@@ -559,51 +497,55 @@ def plot_algo_comparisons(base_log_dir: str, experiment_ids: list[str], output_d
             print(f"[plot][warn] Missing TD3/DDPG pair for {exp_id}. Skipping per-experiment comparison.")
             continue
 
-        td3_reward_all.append(td3_series["reward_smooth"])
-        ddpg_reward_all.append(ddpg_series["reward_smooth"])
-        td3_crash_all.append(td3_series["crash_smooth"])
-        ddpg_crash_all.append(ddpg_series["crash_smooth"])
-        td3_laps_all.append(td3_series["laps_smooth"])
-        ddpg_laps_all.append(ddpg_series["laps_smooth"])
+        td3_reward_all.append(td3_series["reward_total"])
+        ddpg_reward_all.append(ddpg_series["reward_total"])
+        td3_crash_all.append(td3_series["crash_total"])
+        ddpg_crash_all.append(ddpg_series["crash_total"])
+        td3_laps_all.append(td3_series["laps_total"])
+        ddpg_laps_all.append(ddpg_series["laps_total"])
 
         td3_plot = {
             **td3_series,
             "reward_plot": td3_series["reward_smooth"],
-            "reward_plot_raw": td3_series["reward_total"],
+            "reward_plot_std": td3_series["reward_total_std"],
             "crash_plot": td3_series["crash_smooth"],
-            "crash_plot_raw": td3_series["crash_total"],
+            "crash_plot_std": td3_series["crash_total_std"],
             "laps_plot": td3_series["laps_smooth"],
-            "laps_plot_raw": td3_series["laps_total"],
+            "laps_plot_std": td3_series["laps_total_std"],
         }
         ddpg_plot = {
             **ddpg_series,
             "reward_plot": ddpg_series["reward_smooth"],
-            "reward_plot_raw": ddpg_series["reward_total"],
+            "reward_plot_std": ddpg_series["reward_total_std"],
             "crash_plot": ddpg_series["crash_smooth"],
-            "crash_plot_raw": ddpg_series["crash_total"],
+            "crash_plot_std": ddpg_series["crash_total_std"],
             "laps_plot": ddpg_series["laps_smooth"],
-            "laps_plot_raw": ddpg_series["laps_total"],
+            "laps_plot_std": ddpg_series["laps_total_std"],
         }
 
+        comparison_label = format_experiment_label(exp_id)
         _plot_two_algo_metric(
             td3_plot,
             ddpg_plot,
             key="reward_plot",
-            ylabel="Reward",
+            ylabel="Average Reward",
+            title=_format_plot_title("Reward", comparison_label),
             output_path=os.path.join(per_experiment_dir, f"{sanitize_name(exp_id)}_td3_vs_ddpg_reward.png"),
         )
         _plot_two_algo_metric(
             td3_plot,
             ddpg_plot,
             key="crash_plot",
-            ylabel="Collisions",
+            ylabel="Crash Rate (%)",
+            title=_format_plot_title("Crash Rate", comparison_label),
             output_path=os.path.join(per_experiment_dir, f"{sanitize_name(exp_id)}_td3_vs_ddpg_crash.png"),
         )
         _plot_two_algo_metric(
             td3_plot,
             ddpg_plot,
             key="laps_plot",
-            ylabel="Laps completed",
+            ylabel="Laps per Episode",
+            title=_format_plot_title("Laps per Episode", comparison_label),
             output_path=os.path.join(per_experiment_dir, f"{sanitize_name(exp_id)}_td3_vs_ddpg_laps.png"),
         )
 
@@ -611,36 +553,46 @@ def plot_algo_comparisons(base_log_dir: str, experiment_ids: list[str], output_d
         print("[plot][warn] No complete TD3/DDPG experiment pairs found for aggregate comparison.")
         return
 
-    td3_reward_avg = _aggregate_mean(td3_reward_all)
-    ddpg_reward_avg = _aggregate_mean(ddpg_reward_all)
-    td3_crash_avg = _aggregate_mean(td3_crash_all)
-    ddpg_crash_avg = _aggregate_mean(ddpg_crash_all)
-    td3_laps_avg = _aggregate_mean(td3_laps_all)
-    ddpg_laps_avg = _aggregate_mean(ddpg_laps_all)
+    td3_reward_avg, td3_reward_std = _aggregate_mean_std(td3_reward_all)
+    ddpg_reward_avg, ddpg_reward_std = _aggregate_mean_std(ddpg_reward_all)
+    td3_crash_avg, td3_crash_std = _aggregate_mean_std(td3_crash_all)
+    ddpg_crash_avg, ddpg_crash_std = _aggregate_mean_std(ddpg_crash_all)
+    td3_laps_avg, td3_laps_std = _aggregate_mean_std(td3_laps_all)
+    ddpg_laps_avg, ddpg_laps_std = _aggregate_mean_std(ddpg_laps_all)
 
     reward_ep = np.arange(1, len(td3_reward_avg) + 1)
     crash_ep = np.arange(1, len(td3_crash_avg) + 1)
     laps_ep = np.arange(1, len(td3_laps_avg) + 1)
 
+    td3_reward_avg = rolling_mean(td3_reward_avg, window)
+    ddpg_reward_avg = rolling_mean(ddpg_reward_avg, window)
+    td3_crash_avg = rolling_mean(td3_crash_avg, window)
+    ddpg_crash_avg = rolling_mean(ddpg_crash_avg, window)
+    td3_laps_avg = rolling_mean(td3_laps_avg, window)
+    ddpg_laps_avg = rolling_mean(ddpg_laps_avg, window)
+
     _plot_two_algo_metric(
-        {"episodes": reward_ep, "reward_plot": td3_reward_avg, "reward_plot_raw": td3_reward_avg},
-        {"episodes": reward_ep, "reward_plot": ddpg_reward_avg, "reward_plot_raw": ddpg_reward_avg},
+        {"episodes": reward_ep, "reward_plot": td3_reward_avg, "reward_plot_std": td3_reward_std},
+        {"episodes": reward_ep, "reward_plot": ddpg_reward_avg, "reward_plot_std": ddpg_reward_std},
         key="reward_plot",
-        ylabel="Average reward",
+        ylabel="Average Reward",
+        title=_format_plot_title("Reward", "All Experiments"),
         output_path=os.path.join(output_dir, "td3_vs_ddpg_reward.png"),
     )
     _plot_two_algo_metric(
-        {"episodes": crash_ep, "crash_plot": td3_crash_avg, "crash_plot_raw": td3_crash_avg},
-        {"episodes": crash_ep, "crash_plot": ddpg_crash_avg, "crash_plot_raw": ddpg_crash_avg},
+        {"episodes": crash_ep, "crash_plot": td3_crash_avg, "crash_plot_std": td3_crash_std},
+        {"episodes": crash_ep, "crash_plot": ddpg_crash_avg, "crash_plot_std": ddpg_crash_std},
         key="crash_plot",
-        ylabel="Average collisions",
+        ylabel="Crash Rate (%)",
+        title=_format_plot_title("Crash Rate", "All Experiments"),
         output_path=os.path.join(output_dir, "td3_vs_ddpg_crash.png"),
     )
     _plot_two_algo_metric(
-        {"episodes": laps_ep, "laps_plot": td3_laps_avg, "laps_plot_raw": td3_laps_avg},
-        {"episodes": laps_ep, "laps_plot": ddpg_laps_avg, "laps_plot_raw": ddpg_laps_avg},
+        {"episodes": laps_ep, "laps_plot": td3_laps_avg, "laps_plot_std": td3_laps_std},
+        {"episodes": laps_ep, "laps_plot": ddpg_laps_avg, "laps_plot_std": ddpg_laps_std},
         key="laps_plot",
-        ylabel="Average laps completed",
+        ylabel="Laps per Episode",
+        title=_format_plot_title("Laps per Episode", "All Experiments"),
         output_path=os.path.join(output_dir, "td3_vs_ddpg_laps.png"),
     )
 
