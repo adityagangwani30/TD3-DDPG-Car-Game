@@ -34,6 +34,14 @@ NOISE_TO_LABEL = {
     0.02: "N2",
     0.05: "N3",
 }
+REWARD_SYSTEM_COLORS = {
+    "R1": "#1f77b4",
+    "R2": "#ff7f0e",
+    "R3": "#2ca02c",
+    "R4": "#d62728",
+}
+REWARD_LEVELS = ("R1", "R2", "R3", "R4")
+NOISE_LEVELS = ("N1", "N2", "N3")
 
 
 def apply_styling():
@@ -305,6 +313,161 @@ def _experiment_color_map(experiment_ids: list[str]) -> dict[str, str]:
 
     cmap = plt.get_cmap("tab20", len(ordered_ids))
     return {experiment_id: cmap(index) for index, experiment_id in enumerate(ordered_ids)}
+
+
+def _group_noise_experiment_series(
+    base_log_dir: str,
+    algo: str,
+    experiment_ids: list[str],
+    rolling_window: int,
+) -> dict[str, dict[str, dict[str, np.ndarray]]]:
+    """Group seed-aggregated experiment series by noise level and reward system."""
+    grouped: dict[str, dict[str, dict[str, np.ndarray]]] = {noise: {} for noise in NOISE_LEVELS}
+
+    for experiment_id in _sorted_experiment_ids(experiment_ids):
+        label = format_experiment_label(experiment_id)
+        match = re.fullmatch(r"(R[1-4])_(N[1-3])", label)
+        if not match:
+            continue
+
+        reward_label, noise_label = match.groups()
+        series = load_experiment_series(
+            base_log_dir=base_log_dir,
+            algo=algo,
+            experiment_id=experiment_id,
+            rolling_window=rolling_window,
+        )
+        if series is None:
+            continue
+
+        grouped.setdefault(noise_label, {})[reward_label] = {
+            **series,
+            "reward_plot": series["reward_smooth"],
+            "reward_plot_std": series["reward_total_std"],
+            "crash_plot": series["crash_smooth"],
+            "crash_plot_std": series["crash_total_std"],
+            "laps_plot": series["laps_smooth"],
+            "laps_plot_std": series["laps_total_std"],
+        }
+
+    return grouped
+
+
+def _plot_grouped_noise_metric(
+    algo: str,
+    noise_label: str,
+    metric_key: str,
+    ylabel: str,
+    title: str,
+    series_by_reward: dict[str, dict[str, np.ndarray]],
+    output_path: str,
+):
+    """Plot one metric for a fixed noise level with four reward-system curves."""
+    fig, ax = plt.subplots(figsize=(10, 6))
+    plotted = 0
+
+    for reward_label in REWARD_LEVELS:
+        series = series_by_reward.get(reward_label)
+        if series is None:
+            continue
+
+        episodes = series["episodes"]
+        mean_values = series[metric_key]
+        std_values = series.get(f"{metric_key}_std")
+        color = REWARD_SYSTEM_COLORS[reward_label]
+        experiment_label = f"{reward_label}_{noise_label}"
+
+        ax.plot(
+            episodes,
+            mean_values,
+            color=color,
+            linewidth=2.2,
+            alpha=0.98,
+            label=experiment_label,
+            zorder=3,
+        )
+        if std_values is not None and len(std_values) == len(mean_values):
+            ax.fill_between(
+                episodes,
+                mean_values - std_values,
+                mean_values + std_values,
+                color=color,
+                alpha=0.08,
+                linewidth=0,
+                zorder=2,
+            )
+        plotted += 1
+
+    if not plotted:
+        plt.close(fig)
+        print(f"[plot][warn] No grouped series available for {algo.upper()} {noise_label} ({metric_key}).")
+        return
+
+    ax.set_title(title)
+    ax.set_xlabel("Episodes", fontsize=FONT_SIZE)
+    ax.set_ylabel(ylabel, fontsize=FONT_SIZE)
+    ax.tick_params(axis="both", labelsize=FONT_SIZE)
+    ax.margins(x=0.02)
+    ax.legend(
+        loc="upper center",
+        bbox_to_anchor=(0.5, -0.15),
+        ncol=4,
+        fontsize=9,
+        frameon=True,
+        facecolor="white",
+        framealpha=0.96,
+        edgecolor="#d0d0d0",
+    )
+    fig.tight_layout(rect=(0, 0.08, 1, 1))
+    fig.savefig(output_path, dpi=PLOT_DPI, bbox_inches="tight", pad_inches=0.08)
+    plt.close(fig)
+    print(f"[plot] Saved: {output_path}")
+
+
+def plot_grouped_noise_comparisons(
+    base_log_dir: str,
+    experiment_ids: list[str],
+    output_dir: str,
+    rolling_window: int,
+):
+    """Generate grouped comparison plots for each noise level and algorithm."""
+    os.makedirs(output_dir, exist_ok=True)
+    apply_styling()
+
+    for algo in ALGORITHMS:
+        grouped_series = _group_noise_experiment_series(
+            base_log_dir=base_log_dir,
+            algo=algo,
+            experiment_ids=experiment_ids,
+            rolling_window=rolling_window,
+        )
+
+        for noise_label in NOISE_LEVELS:
+            series_by_reward = grouped_series.get(noise_label, {})
+            if not series_by_reward:
+                print(f"[plot][warn] No grouped {algo.upper()} series found for noise level {noise_label}.")
+                continue
+
+            for metric_key, ylabel, title_stub in [
+                ("reward_plot", "Average Reward", "Performance"),
+                ("crash_plot", "Crash Rate (%)", "Crash Rate Comparison"),
+                ("laps_plot", "Laps per Episode", "Laps Comparison"),
+            ]:
+                if metric_key == "reward_plot":
+                    title = f"{algo.upper()} Performance (Reward) under Noise Level {noise_label}"
+                else:
+                    title = f"{algo.upper()} {title_stub} under Noise Level {noise_label}"
+
+                output_path = os.path.join(output_dir, f"{algo}_{noise_label.lower()}_{metric_key.split('_')[0]}.png")
+                _plot_grouped_noise_metric(
+                    algo=algo,
+                    noise_label=noise_label,
+                    metric_key=metric_key,
+                    ylabel=ylabel,
+                    title=title,
+                    series_by_reward=series_by_reward,
+                    output_path=output_path,
+                )
 
 
 def find_convergence_episode(episodes: np.ndarray, smoothed_reward: np.ndarray) -> int | None:
@@ -800,10 +963,10 @@ def main():
         help="Output directory for TD3 vs DDPG plots (default: results/plots/comparison)",
     )
     parser.add_argument(
-        "--aggregate-output",
+        "--grouped-output",
         type=str,
-        default=os.path.join("results", "aggregate"),
-        help="Output directory for TD3/DDPG aggregate experiment plots (default: results/aggregate)",
+        default=os.path.join("results", "grouped"),
+        help="Output directory for grouped noise-level comparison plots (default: results/grouped)",
     )
     args = parser.parse_args()
 
@@ -831,11 +994,11 @@ def main():
             window=window,
             smooth=args.smooth,
         )
-        plot_all_experiment_aggregates(
+        plot_grouped_noise_comparisons(
             base_log_dir=args.log_dir,
             experiment_ids=experiment_ids,
-            output_dir=args.aggregate_output,
-            window=window,
+            output_dir=args.grouped_output,
+            rolling_window=window,
         )
         print(f"[plot] Comparison mode complete for up to {len(experiment_ids)} experiments.")
         return

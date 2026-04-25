@@ -24,15 +24,22 @@ from pathlib import Path
 from textwrap import fill
 from typing import Any
 from urllib import error, request
+from xml.sax.saxutils import escape as xml_escape
 
 import matplotlib.pyplot as plt
 import numpy as np
-from matplotlib.backends.backend_pdf import PdfPages
+from reportlab.lib import colors
+from reportlab.lib.enums import TA_CENTER, TA_LEFT
+from reportlab.lib.pagesizes import letter
+from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
+from reportlab.lib.units import inch
+from reportlab.lib.utils import ImageReader
+from reportlab.platypus import Image, PageBreak, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 
 
 DEFAULT_RESULTS_DIR = Path("results")
 DEFAULT_LOGS_DIR = Path("logs")
-DEFAULT_OUTPUT_FILE = Path("td3_ddpg_report.pdf")
+DEFAULT_OUTPUT_FILE = Path("td3_ddpg_research_report.pdf")
 DEFAULT_MODEL = "meta/llama-3.1-70b-instruct"
 DEFAULT_API_BASE = "https://integrate.api.nvidia.com/v1/chat/completions"
 DEFAULT_LAST_N = 100
@@ -41,6 +48,8 @@ DEFAULT_STABILITY_WINDOW = 10
 DEFAULT_MAX_RETRIES = 3
 
 ALGORITHMS = ("td3", "ddpg")
+REWARD_LEVELS = ("R1", "R2", "R3", "R4")
+NOISE_LEVELS = ("N1", "N2", "N3")
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".bmp"}
 
 
@@ -74,10 +83,14 @@ class SeedMetrics:
     seed: str
     num_episodes: int
     avg_reward_last_n: float
+    avg_crash_last_n: float
+    avg_laps_last_n: float
     max_reward: float
     convergence_episode: int
     final_reward: float
     reward_std: float
+    crash_std: float
+    laps_std: float
 
 
 @dataclass
@@ -89,6 +102,12 @@ class AlgorithmMetrics:
     seeds: list[SeedMetrics] = field(default_factory=list)
     avg_reward_last_n_mean: float | None = None
     avg_reward_last_n_variance: float | None = None
+    avg_crash_last_n_mean: float | None = None
+    avg_crash_last_n_variance: float | None = None
+    avg_laps_last_n_mean: float | None = None
+    avg_laps_last_n_variance: float | None = None
+    reward_std_mean: float | None = None
+    reward_std_variance: float | None = None
     max_reward_mean: float | None = None
     max_reward_variance: float | None = None
     convergence_episode_mean: float | None = None
@@ -107,6 +126,12 @@ class AlgorithmMetrics:
             "seed_count": len(self.seeds),
             "avg_reward_last_n_mean": self.avg_reward_last_n_mean,
             "avg_reward_last_n_variance": self.avg_reward_last_n_variance,
+            "avg_crash_last_n_mean": self.avg_crash_last_n_mean,
+            "avg_crash_last_n_variance": self.avg_crash_last_n_variance,
+            "avg_laps_last_n_mean": self.avg_laps_last_n_mean,
+            "avg_laps_last_n_variance": self.avg_laps_last_n_variance,
+            "reward_std_mean": self.reward_std_mean,
+            "reward_std_variance": self.reward_std_variance,
             "max_reward_mean": self.max_reward_mean,
             "max_reward_variance": self.max_reward_variance,
             "convergence_episode_mean": self.convergence_episode_mean,
@@ -248,10 +273,19 @@ def compute_seed_metrics(
 
     ordered_logs = sorted(logs, key=lambda item: safe_int(item.get("episode"), 0))
     rewards = [safe_float(row.get("reward_total"), 0.0) for row in ordered_logs]
+    crashes = [safe_float(row.get("collisions"), 0.0) for row in ordered_logs]
+    laps = [safe_float(row.get("laps_completed"), 0.0) for row in ordered_logs]
     if not rewards:
         return None
 
-    avg_reward_last_n = float(np.mean(rewards[-min(last_n, len(rewards)) :]))
+    tail = min(last_n, len(rewards))
+    tail_rewards = rewards[-tail:]
+    tail_crashes = crashes[-tail:] if crashes else []
+    tail_laps = laps[-tail:] if laps else []
+
+    avg_reward_last_n = float(np.mean(tail_rewards))
+    avg_crash_last_n = float(np.mean(tail_crashes)) * 100.0 if tail_crashes else 0.0
+    avg_laps_last_n = float(np.mean(tail_laps)) if tail_laps else 0.0
     max_reward = float(np.max(rewards))
     convergence_episode = int(
         estimate_convergence_episode(
@@ -260,7 +294,9 @@ def compute_seed_metrics(
             stability_window=stability_window,
         )
     )
-    reward_std = float(np.std(rewards))
+    reward_std = float(np.std(tail_rewards))
+    crash_std = float(np.std(tail_crashes)) * 100.0 if tail_crashes else 0.0
+    laps_std = float(np.std(tail_laps)) if tail_laps else 0.0
     final_reward = float(rewards[-1])
     seed_value = ordered_logs[-1].get("seed", ordered_logs[0].get("seed", "unknown"))
 
@@ -268,10 +304,14 @@ def compute_seed_metrics(
         seed=str(seed_value),
         num_episodes=len(rewards),
         avg_reward_last_n=avg_reward_last_n,
+        avg_crash_last_n=avg_crash_last_n,
+        avg_laps_last_n=avg_laps_last_n,
         max_reward=max_reward,
         convergence_episode=convergence_episode,
         final_reward=final_reward,
         reward_std=reward_std,
+        crash_std=crash_std,
+        laps_std=laps_std,
     )
 
 
@@ -299,6 +339,9 @@ def aggregate_seed_metrics(algorithm: str, experiment: str, seed_metrics: list[S
         return None
 
     avg_reward_last_n_values = [item.avg_reward_last_n for item in seed_metrics]
+    avg_crash_last_n_values = [item.avg_crash_last_n for item in seed_metrics]
+    avg_laps_last_n_values = [item.avg_laps_last_n for item in seed_metrics]
+    reward_std_values = [item.reward_std for item in seed_metrics]
     max_reward_values = [item.max_reward for item in seed_metrics]
     convergence_values = [float(item.convergence_episode) for item in seed_metrics]
     final_reward_values = [item.final_reward for item in seed_metrics]
@@ -310,6 +353,12 @@ def aggregate_seed_metrics(algorithm: str, experiment: str, seed_metrics: list[S
         seeds=seed_metrics,
         avg_reward_last_n_mean=mean_or_none(avg_reward_last_n_values),
         avg_reward_last_n_variance=variance_or_none(avg_reward_last_n_values),
+        avg_crash_last_n_mean=mean_or_none(avg_crash_last_n_values),
+        avg_crash_last_n_variance=variance_or_none(avg_crash_last_n_values),
+        avg_laps_last_n_mean=mean_or_none(avg_laps_last_n_values),
+        avg_laps_last_n_variance=variance_or_none(avg_laps_last_n_values),
+        reward_std_mean=mean_or_none(reward_std_values),
+        reward_std_variance=variance_or_none(reward_std_values),
         max_reward_mean=mean_or_none(max_reward_values),
         max_reward_variance=variance_or_none(max_reward_values),
         convergence_episode_mean=mean_or_none(convergence_values),
@@ -488,6 +537,8 @@ def resolve_results_sections(results_dir: Path) -> dict[str, Path]:
     """Resolve comparison and algorithm-specific plot roots across layouts."""
     candidates = {
         "comparison": [results_dir / "comparison", results_dir / "plots" / "comparison"],
+        "grouped": [results_dir / "grouped", results_dir / "plots" / "grouped"],
+        "aggregate": [results_dir / "aggregate", results_dir / "plots" / "aggregate"],
         "td3": [results_dir / "td3", results_dir / "plots" / "td3"],
         "ddpg": [results_dir / "ddpg", results_dir / "plots" / "ddpg"],
     }
@@ -624,16 +675,17 @@ def build_experiment_prompt(
     """Build the concise prompt template for the NVIDIA model."""
     focus_line = f"Metric focus: {metric_focus}\n\n" if metric_focus else ""
     return (
-        "You are analyzing reinforcement learning results.\n\n"
+        "You are analyzing reinforcement learning results for a research report.\n\n"
         f"Experiment: {experiment}\n\n"
         f"{focus_line}"
-        f"TD3:\n{json.dumps(td3_metrics, indent=2, sort_keys=True)}\n\n"
-        f"DDPG:\n{json.dumps(ddpg_metrics, indent=2, sort_keys=True)}\n\n"
+        f"TD3 metrics:\n{json.dumps(td3_metrics, indent=2, sort_keys=True)}\n\n"
+        f"DDPG metrics:\n{json.dumps(ddpg_metrics, indent=2, sort_keys=True)}\n\n"
         "Compare both algorithms and provide:\n"
-        "1. Which performs better and why\n"
+        "1. Which algorithm performs better overall and why\n"
         "2. Convergence comparison\n"
-        "3. Stability insights\n\n"
-        "Keep the explanation concise and technical.\n"
+        "3. Stability insights\n"
+        "4. Relative crash-rate and lap-performance observations\n\n"
+        "Keep the explanation concise, technical, and evidence-based.\n"
         "Do not guess missing values. Base the answer only on the metrics provided."
     )
 
@@ -641,14 +693,116 @@ def build_experiment_prompt(
 def build_summary_prompt(experiment_reports: list[dict[str, Any]]) -> str:
     """Build the final summary prompt across all experiments."""
     return (
-        "You are analyzing reinforcement learning results across multiple experiments.\n\n"
+        "You are analyzing reinforcement learning results across multiple experiments for a research paper.\n\n"
         f"Experiment summaries:\n{json.dumps(experiment_reports, indent=2, sort_keys=True)}\n\n"
         "Provide a concise technical summary covering:\n"
-        "1. Overall performance comparison\n"
-        "2. Stability trends\n"
-        "3. Convergence insights\n\n"
-        "Keep the explanation concise and technical.\n"
+        "1. Overall TD3 vs DDPG performance\n"
+        "2. Stability trends across experiments\n"
+        "3. Convergence insights\n"
+        "4. Reward, crash-rate, and lap-trend observations\n\n"
+        "Keep the explanation concise, technical, and evidence-based.\n"
         "Do not guess missing values. Base the answer only on the metrics provided."
+    )
+
+
+def build_noise_level_prompt(noise_label: str, noise_metrics: dict[str, Any]) -> str:
+    """Build a structured prompt for one noise level section."""
+    return (
+        "You are analyzing RL results for a research report.\n\n"
+        f"Noise level: {noise_label}\n\n"
+        f"Structured metrics:\n{json.dumps(noise_metrics, indent=2, sort_keys=True)}\n\n"
+        "For this noise level, explain:\n"
+        "1. Which reward system performs best\n"
+        "2. Which system is most stable\n"
+        "3. Observed reward, crash-rate, and lap trends\n\n"
+        "Keep the explanation concise and evidence-based."
+    )
+
+
+def build_algorithm_comparison_prompt(comparison_metrics: dict[str, Any]) -> str:
+    """Build a structured prompt for TD3 vs DDPG comparison."""
+    return (
+        "You are comparing TD3 and DDPG in a research report.\n\n"
+        f"Structured metrics:\n{json.dumps(comparison_metrics, indent=2, sort_keys=True)}\n\n"
+        "Explain:\n"
+        "1. Which algorithm performs better overall\n"
+        "2. Convergence speed differences\n"
+        "3. Stability differences\n"
+        "4. Reward, crash-rate, and lap behavior\n\n"
+        "Keep the explanation concise and evidence-based."
+    )
+
+
+def build_key_insights_prompt(insight_metrics: dict[str, Any]) -> str:
+    """Build a structured prompt for cross-noise key insights."""
+    return (
+        "You are extracting key insights from structured RL metrics.\n\n"
+        f"Structured metrics:\n{json.dumps(insight_metrics, indent=2, sort_keys=True)}\n\n"
+        "Provide:\n"
+        "1. Best reward function across all noise levels\n"
+        "2. Overall TD3 vs DDPG performance trend\n"
+        "3. Convergence comparison\n\n"
+        "Keep the explanation concise and evidence-based."
+    )
+
+
+def build_final_conclusion_prompt(conclusion_metrics: dict[str, Any]) -> str:
+    """Build a structured prompt for the final conclusion section."""
+    return (
+        "You are writing the conclusion for a research-style RL report.\n\n"
+        f"Structured metrics:\n{json.dumps(conclusion_metrics, indent=2, sort_keys=True)}\n\n"
+        "Summarize:\n"
+        "1. Best algorithm overall\n"
+        "2. Best reward system\n"
+        "3. Effect of noise on performance\n"
+        "4. Main trade-offs\n\n"
+        "Keep the conclusion concise and evidence-based."
+    )
+
+
+def fallback_noise_analysis(noise_label: str, noise_metrics: dict[str, Any]) -> str:
+    """Deterministic fallback for one noise level."""
+    td3 = noise_metrics.get("td3", {})
+    ddpg = noise_metrics.get("ddpg", {})
+    best_reward = noise_metrics.get("best_reward_system", "n/a")
+    return (
+        f"Noise {noise_label}: best reward system is {best_reward}. "
+        f"TD3 reward mean {format_table_value(td3.get('avg_reward_last_n_mean'))}, "
+        f"DDPG reward mean {format_table_value(ddpg.get('avg_reward_last_n_mean'))}. "
+        "Stability is reflected by lower reward standard deviation and earlier convergence."
+    )
+
+
+def fallback_comparison_analysis(comparison_metrics: dict[str, Any]) -> str:
+    """Deterministic fallback for TD3 vs DDPG comparison."""
+    td3 = comparison_metrics.get("td3", {})
+    ddpg = comparison_metrics.get("ddpg", {})
+    winner = comparison_metrics.get("winner", "n/a")
+    return (
+        f"Overall comparison favors {winner}. "
+        f"TD3 reward mean {format_table_value(td3.get('avg_reward_last_n_mean'))}, "
+        f"DDPG reward mean {format_table_value(ddpg.get('avg_reward_last_n_mean'))}. "
+        "Earlier convergence and lower reward standard deviation indicate greater stability."
+    )
+
+
+def fallback_insights_analysis(insight_metrics: dict[str, Any]) -> str:
+    """Deterministic fallback for key insights across noise levels."""
+    best_reward = insight_metrics.get("best_reward_system", "n/a")
+    best_algo = insight_metrics.get("overall_algorithm_winner", "n/a")
+    return (
+        f"Best reward system across all noise levels: {best_reward}. "
+        f"Overall algorithm trend favors {best_algo}. "
+        "Noise generally reduces performance and increases variability."
+    )
+
+
+def fallback_conclusion_analysis(conclusion_metrics: dict[str, Any]) -> str:
+    """Deterministic fallback for the final conclusion."""
+    return (
+        f"Best algorithm overall: {conclusion_metrics.get('best_algorithm', 'n/a')}. "
+        f"Best reward system: {conclusion_metrics.get('best_reward_system', 'n/a')}. "
+        "Higher noise levels generally reduce reward and increase instability."
     )
 
 
@@ -730,6 +884,8 @@ def fallback_analysis(experiment: str, td3_metrics: dict[str, Any] | None, ddpg_
         lines.append(
             "TD3 metrics indicate "
             f"avg reward {format_number(td3_metrics.get('avg_reward_last_n_mean'))}, "
+            f"crash rate {format_number(td3_metrics.get('avg_crash_last_n_mean'))}%, "
+            f"laps {format_number(td3_metrics.get('avg_laps_last_n_mean'))}, "
             f"max reward {format_number(td3_metrics.get('max_reward_mean'))}, "
             f"convergence near episode {format_number(td3_metrics.get('convergence_episode_mean'))}."
         )
@@ -737,6 +893,8 @@ def fallback_analysis(experiment: str, td3_metrics: dict[str, Any] | None, ddpg_
         lines.append(
             "DDPG metrics indicate "
             f"avg reward {format_number(ddpg_metrics.get('avg_reward_last_n_mean'))}, "
+            f"crash rate {format_number(ddpg_metrics.get('avg_crash_last_n_mean'))}%, "
+            f"laps {format_number(ddpg_metrics.get('avg_laps_last_n_mean'))}, "
             f"max reward {format_number(ddpg_metrics.get('max_reward_mean'))}, "
             f"convergence near episode {format_number(ddpg_metrics.get('convergence_episode_mean'))}."
         )
@@ -744,6 +902,8 @@ def fallback_analysis(experiment: str, td3_metrics: dict[str, Any] | None, ddpg_
     if td3_metrics is not None and ddpg_metrics is not None:
         td3_avg = safe_float(td3_metrics.get("avg_reward_last_n_mean"), 0.0)
         ddpg_avg = safe_float(ddpg_metrics.get("avg_reward_last_n_mean"), 0.0)
+        td3_stability = safe_float(td3_metrics.get("reward_std_mean"), 0.0)
+        ddpg_stability = safe_float(ddpg_metrics.get("reward_std_mean"), 0.0)
         if td3_avg > ddpg_avg:
             winner = "TD3"
         elif ddpg_avg > td3_avg:
@@ -752,7 +912,7 @@ def fallback_analysis(experiment: str, td3_metrics: dict[str, Any] | None, ddpg_
             winner = "neither"
 
         lines.append(
-            f"Average-reward comparison favors {winner}. Stability is estimated from the variance and convergence episode spread across seeds."
+            f"Average-reward comparison favors {winner}. Reward stability is estimated from the seed-level reward standard deviation ({format_number(td3_stability)} vs {format_number(ddpg_stability)})."
         )
 
     return " ".join(lines)
@@ -774,170 +934,846 @@ def collect_analysis_text(
         return fallback_text, False
 
 
+def build_report_styles() -> dict[str, ParagraphStyle]:
+    """Create a compact style set for the research-style PDF."""
+    styles = getSampleStyleSheet()
+    styles.add(
+        ParagraphStyle(
+            name="ReportTitle",
+            parent=styles["Title"],
+            fontName="Helvetica-Bold",
+            fontSize=24,
+            leading=28,
+            alignment=TA_CENTER,
+            textColor=colors.HexColor("#1f1f1f"),
+            spaceAfter=10,
+        )
+    )
+    styles.add(
+        ParagraphStyle(
+            name="ReportSubtitle",
+            parent=styles["BodyText"],
+            fontName="Helvetica",
+            fontSize=11,
+            leading=14,
+            alignment=TA_CENTER,
+            textColor=colors.HexColor("#4a4a4a"),
+            spaceAfter=6,
+        )
+    )
+    styles.add(
+        ParagraphStyle(
+            name="SectionHeading",
+            parent=styles["Heading1"],
+            fontName="Helvetica-Bold",
+            fontSize=16,
+            leading=19,
+            textColor=colors.HexColor("#1f1f1f"),
+            spaceBefore=6,
+            spaceAfter=8,
+        )
+    )
+    styles.add(
+        ParagraphStyle(
+            name="SubSectionHeading",
+            parent=styles["Heading2"],
+            fontName="Helvetica-Bold",
+            fontSize=13,
+            leading=16,
+            textColor=colors.HexColor("#2f2f2f"),
+            spaceBefore=4,
+            spaceAfter=6,
+        )
+    )
+    styles.add(
+        ParagraphStyle(
+            name="PlotHeading",
+            parent=styles["Heading3"],
+            fontName="Helvetica-Bold",
+            fontSize=12,
+            leading=14,
+            textColor=colors.HexColor("#1f1f1f"),
+            spaceAfter=6,
+        )
+    )
+    styles.add(
+        ParagraphStyle(
+            name="ReportCaption",
+            parent=styles["BodyText"],
+            fontName="Helvetica-Oblique",
+            fontSize=9.5,
+            leading=12,
+            textColor=colors.HexColor("#505050"),
+            spaceBefore=4,
+            spaceAfter=5,
+        )
+    )
+    styles.add(
+        ParagraphStyle(
+            name="ReportNote",
+            parent=styles["BodyText"],
+            fontName="Helvetica",
+            fontSize=9.5,
+            leading=12,
+            textColor=colors.HexColor("#444444"),
+            spaceAfter=5,
+        )
+    )
+    styles.add(
+        ParagraphStyle(
+            name="TableCell",
+            parent=styles["BodyText"],
+            fontName="Helvetica",
+            fontSize=7.6,
+            leading=9,
+            alignment=TA_CENTER,
+        )
+    )
+    styles.add(
+        ParagraphStyle(
+            name="TableCellLeft",
+            parent=styles["BodyText"],
+            fontName="Helvetica",
+            fontSize=7.6,
+            leading=9,
+            alignment=TA_LEFT,
+        )
+    )
+    styles.add(
+        ParagraphStyle(
+            name="AnalysisBody",
+            parent=styles["BodyText"],
+            fontName="Helvetica",
+            fontSize=10,
+            leading=13,
+            textColor=colors.HexColor("#232323"),
+            spaceAfter=4,
+        )
+    )
+    return styles
+
+
+def add_page_number(canvas, doc):
+    """Draw a page number footer on each page."""
+    canvas.saveState()
+    canvas.setFont("Helvetica", 9)
+    canvas.setFillColor(colors.HexColor("#666666"))
+    canvas.drawRightString(doc.pagesize[0] - doc.rightMargin, 0.4 * inch, f"Page {canvas.getPageNumber()}")
+    canvas.restoreState()
+
+
+def format_percentage(value: Any, digits: int = 1) -> str:
+    """Format numeric values as percentages for the summary table."""
+    if value is None:
+        return "n/a"
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return "n/a"
+    if math.isnan(numeric) or math.isinf(numeric):
+        return "n/a"
+    return f"{numeric:.{digits}f}%"
+
+
+def format_table_value(value: Any, digits: int = 2) -> str:
+    """Format a numeric table value with graceful fallback."""
+    if value is None:
+        return "n/a"
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return str(value)
+    if math.isnan(numeric) or math.isinf(numeric):
+        return "n/a"
+    return f"{numeric:.{digits}f}"
+
+
+def score_algorithm(metrics: AlgorithmMetrics | None) -> float:
+    """Score an algorithm using reward and stability."""
+    if metrics is None:
+        return float("-inf")
+
+    reward = safe_float(metrics.avg_reward_last_n_mean, float("-inf"))
+    stability = safe_float(metrics.reward_std_mean, float("inf"))
+    if math.isinf(reward) or math.isinf(stability):
+        return float("-inf")
+    return reward - stability
+
+
+def choose_winner(td3_metrics: AlgorithmMetrics | None, ddpg_metrics: AlgorithmMetrics | None) -> str:
+    """Select a per-experiment winner using reward and stability."""
+    if td3_metrics is None and ddpg_metrics is None:
+        return "n/a"
+    if td3_metrics is None:
+        return "DDPG"
+    if ddpg_metrics is None:
+        return "TD3"
+
+    td3_score = score_algorithm(td3_metrics)
+    ddpg_score = score_algorithm(ddpg_metrics)
+    if abs(td3_score - ddpg_score) <= 1e-9:
+        td3_crash = safe_float(td3_metrics.avg_crash_last_n_mean, float("inf"))
+        ddpg_crash = safe_float(ddpg_metrics.avg_crash_last_n_mean, float("inf"))
+        if abs(td3_crash - ddpg_crash) <= 1e-9:
+            td3_conv = safe_float(td3_metrics.convergence_episode_mean, float("inf"))
+            ddpg_conv = safe_float(ddpg_metrics.convergence_episode_mean, float("inf"))
+            if abs(td3_conv - ddpg_conv) <= 1e-9:
+                return "Tie"
+            return "TD3" if td3_conv < ddpg_conv else "DDPG"
+        return "TD3" if td3_crash < ddpg_crash else "DDPG"
+    return "TD3" if td3_score > ddpg_score else "DDPG"
+
+
+def experiment_sort_key(experiment_id: str) -> tuple[int, int, str]:
+    """Sort experiment identifiers in reward/noise order."""
+    match = re.search(r"r(\d+)_n(\d+)", experiment_id.lower())
+    if match:
+        return int(match.group(1)), int(match.group(2)), experiment_id
+    return 99, 99, experiment_id
+
+
+def sorted_experiment_ids(experiment_ids: list[str]) -> list[str]:
+    """Deduplicate and sort experiment identifiers."""
+    return sorted({str(exp).strip() for exp in experiment_ids}, key=experiment_sort_key)
+
+
+def find_existing_file(paths: list[Path]) -> Path | None:
+    """Return the first existing path from a list of candidates."""
+    for path in paths:
+        if path.exists():
+            return path
+    return None
+
+
+def locate_plot_file(results_dir: Path, relative_candidates: list[str]) -> Path | None:
+    """Find a plot under results/ or results/plots/ fallback layouts."""
+    candidates: list[Path] = []
+    for relative_path in relative_candidates:
+        candidates.append(results_dir / relative_path)
+        candidates.append(results_dir / "plots" / relative_path)
+    return find_existing_file(candidates)
+
+
+def format_experiment_label(experiment_id: str) -> str:
+    """Normalize an experiment identifier for grouping and comparisons."""
+    return experiment_id.strip().upper().replace("-", "_").replace(" ", "")
+
+
+def parse_experiment_components(experiment_id: str) -> tuple[str | None, str | None]:
+    """Extract reward-system and noise-level labels from an experiment identifier."""
+    match = re.fullmatch(r"(R[1-4])_(N[1-3])", format_experiment_label(experiment_id))
+    if not match:
+        return None, None
+    return match.group(1), match.group(2)
+
+
+def group_reports_by_reward_and_noise(reports: list[ExperimentReport]) -> dict[str, dict[str, dict[str, AlgorithmMetrics]]]:
+    """Group experiment reports by noise level and reward system."""
+    grouped: dict[str, dict[str, dict[str, AlgorithmMetrics]]] = {
+        "N1": {},
+        "N2": {},
+        "N3": {},
+    }
+
+    for report in reports:
+        reward_label, noise_label = parse_experiment_components(report.experiment)
+        if reward_label is None or noise_label is None:
+            continue
+
+        grouped.setdefault(noise_label, {})[reward_label] = {
+            "td3": report.td3,
+            "ddpg": report.ddpg,
+        }
+
+    return grouped
+
+
+def group_reports_by_reward(reports: list[ExperimentReport]) -> dict[str, list[ExperimentReport]]:
+    """Group experiment reports by reward system across all noise levels."""
+    grouped: dict[str, list[ExperimentReport]] = {reward: [] for reward in REWARD_LEVELS}
+    for report in reports:
+        reward_label, _ = parse_experiment_components(report.experiment)
+        if reward_label is None:
+            continue
+        grouped.setdefault(reward_label, []).append(report)
+    return grouped
+
+
+def summarize_algorithm(metrics_list: list[AlgorithmMetrics | None]) -> dict[str, Any] | None:
+    """Summarize one algorithm across a collection of experiments."""
+    metrics = [item for item in metrics_list if item is not None]
+    if not metrics:
+        return None
+
+    return {
+        "experiment_count": len(metrics),
+        "avg_reward_last_n_mean": mean_or_none([item.avg_reward_last_n_mean for item in metrics]),
+        "avg_crash_last_n_mean": mean_or_none([item.avg_crash_last_n_mean for item in metrics]),
+        "avg_laps_last_n_mean": mean_or_none([item.avg_laps_last_n_mean for item in metrics]),
+        "reward_std_mean": mean_or_none([item.reward_std_mean for item in metrics]),
+        "convergence_episode_mean": mean_or_none([item.convergence_episode_mean for item in metrics]),
+    }
+
+
+def summarize_reward_systems(reports: list[ExperimentReport]) -> dict[str, dict[str, Any]]:
+    """Aggregate metrics by reward system across all noise levels and algorithms."""
+    grouped = group_reports_by_reward(reports)
+    summary: dict[str, dict[str, Any]] = {}
+
+    for reward_label, reward_reports in grouped.items():
+        summary[reward_label] = {
+            "td3": summarize_algorithm([report.td3 for report in reward_reports]),
+            "ddpg": summarize_algorithm([report.ddpg for report in reward_reports]),
+            "winner_count": {
+                "TD3": sum(1 for report in reward_reports if choose_winner(report.td3, report.ddpg) == "TD3"),
+                "DDPG": sum(1 for report in reward_reports if choose_winner(report.td3, report.ddpg) == "DDPG"),
+            },
+        }
+
+    return summary
+
+
+def build_scaled_image(image_path: Path, max_width: float, max_height: float):
+    """Create a reportlab Image flowable scaled to fit inside the target box."""
+    reader = ImageReader(str(image_path))
+    image_width, image_height = reader.getSize()
+    if image_width <= 0 or image_height <= 0:
+        return None
+
+    scale = min(max_width / float(image_width), max_height / float(image_height))
+    scale = min(scale, 1.0)
+    return Image(str(image_path), width=image_width * scale, height=image_height * scale)
+
+
+def algorithm_metrics_lines(metrics: AlgorithmMetrics | None) -> list[str]:
+    """Create a human-readable metrics summary for LLM prompts and narrative text."""
+    if metrics is None:
+        return ["No metrics available."]
+
+    return [
+        f"Avg reward (last N): {format_table_value(metrics.avg_reward_last_n_mean)}",
+        f"Crash rate (last N): {format_percentage(metrics.avg_crash_last_n_mean)}",
+        f"Laps per episode (last N): {format_table_value(metrics.avg_laps_last_n_mean)}",
+        f"Reward std (stability): {format_table_value(metrics.reward_std_mean)}",
+        f"Convergence episode: {format_table_value(metrics.convergence_episode_mean, digits=0)}",
+    ]
+
+
+def build_summary_table_rows(reports: list[ExperimentReport], styles) -> tuple[list[list[Paragraph]], list[str]]:
+    """Build the research-style summary table and collect skipped experiments."""
+    rows: list[list[Paragraph]] = [
+        [
+            Paragraph("Experiment", styles["TableCell"]),
+            Paragraph("TD3 Reward", styles["TableCell"]),
+            Paragraph("DDPG Reward", styles["TableCell"]),
+            Paragraph("TD3 Crash", styles["TableCell"]),
+            Paragraph("DDPG Crash", styles["TableCell"]),
+            Paragraph("TD3 Laps", styles["TableCell"]),
+            Paragraph("DDPG Laps", styles["TableCell"]),
+            Paragraph("Winner", styles["TableCell"]),
+        ]
+    ]
+    skipped: list[str] = []
+
+    for report in reports:
+        if report.td3 is None or report.ddpg is None:
+            skipped.append(report.experiment)
+            continue
+
+        winner = choose_winner(report.td3, report.ddpg)
+        rows.append(
+            [
+                Paragraph(report.experiment, styles["TableCellLeft"]),
+                Paragraph(format_table_value(report.td3.avg_reward_last_n_mean), styles["TableCell"]),
+                Paragraph(format_table_value(report.ddpg.avg_reward_last_n_mean), styles["TableCell"]),
+                Paragraph(format_percentage(report.td3.avg_crash_last_n_mean), styles["TableCell"]),
+                Paragraph(format_percentage(report.ddpg.avg_crash_last_n_mean), styles["TableCell"]),
+                Paragraph(format_table_value(report.td3.avg_laps_last_n_mean), styles["TableCell"]),
+                Paragraph(format_table_value(report.ddpg.avg_laps_last_n_mean), styles["TableCell"]),
+                Paragraph(f"<b>{winner}</b>", styles["TableCell"]),
+            ]
+        )
+
+    return rows, skipped
+
+
+def build_summary_table(reports: list[ExperimentReport], styles) -> tuple[Table, list[str]]:
+    """Create the summary metrics table for the report."""
+    rows, skipped = build_summary_table_rows(reports, styles)
+    table = Table(
+        rows,
+        colWidths=[1.05 * inch, 0.82 * inch, 0.82 * inch, 0.78 * inch, 0.78 * inch, 0.78 * inch, 0.78 * inch, 0.65 * inch],
+        repeatRows=1,
+    )
+    table.setStyle(
+        TableStyle(
+            [
+                ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#d9e2f3")),
+                ("TEXTCOLOR", (0, 0), (-1, 0), colors.black),
+                ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+                ("FONTSIZE", (0, 0), (-1, -1), 7.5),
+                ("LEADING", (0, 0), (-1, -1), 9),
+                ("ALIGN", (1, 1), (-1, -1), "CENTER"),
+                ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+                ("GRID", (0, 0), (-1, -1), 0.3, colors.HexColor("#8fa1c1")),
+                ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#f7f9fc")]),
+                ("TOPPADDING", (0, 0), (-1, -1), 4),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+            ]
+        )
+    )
+    return table, skipped
+
+
+def build_plot_story_block(
+    title: str,
+    image_path: Path | None,
+    caption: str,
+    styles,
+    analysis_lines: list[str] | None = None,
+    image_height: float = 4.5 * inch,
+):
+    """Create a plot page block with optional analysis text below the figure."""
+    block: list[Any] = [Paragraph(title, styles["PlotHeading"])]
+
+    if image_path is None or not image_path.exists():
+        block.append(Paragraph("Plot missing from the expected results directory.", styles["ReportNote"]))
+    else:
+        image = build_scaled_image(image_path, max_width=6.9 * inch, max_height=image_height)
+        if image is None:
+            block.append(Paragraph(f"Unable to render image: {image_path.name}", styles["ReportNote"]))
+        else:
+            block.append(image)
+
+    block.append(Spacer(1, 0.12 * inch))
+    block.append(Paragraph(f"<b>Caption.</b> {xml_escape(caption)}", styles["ReportCaption"]))
+    if analysis_lines:
+        analysis_text = "<br/>".join(xml_escape(line) for line in analysis_lines)
+        block.append(Paragraph(analysis_text, styles["AnalysisBody"]))
+    block.append(PageBreak())
+    return block
+
+
+def build_experiment_plot_block(
+    algo: str,
+    experiment_id: str,
+    plot_paths: dict[str, Path | None],
+    styles,
+):
+    """Create a compact individual-plot page for one experiment and one algorithm."""
+    block: list[Any] = [
+        Paragraph(f"{algo.upper()} Individual Plots - {experiment_id}", styles["SubSectionHeading"]),
+        Paragraph(
+            "Each figure shows the seed-aggregated mean with moving-average smoothing and standard-deviation shading.",
+            styles["ReportNote"],
+        ),
+    ]
+
+    for metric_key, metric_title in [
+        ("reward", "Reward vs Episodes"),
+        ("crash", "Crash Rate vs Episodes"),
+        ("laps", "Laps vs Episodes"),
+    ]:
+        image_path = plot_paths.get(metric_key)
+        if image_path is None or not image_path.exists():
+            block.append(Paragraph(f"{metric_title}: plot missing.", styles["ReportNote"]))
+            continue
+
+        block.append(Paragraph(metric_title, styles["ReportCaption"]))
+        image = build_scaled_image(image_path, max_width=6.85 * inch, max_height=1.8 * inch)
+        if image is None:
+            block.append(Paragraph(f"Unable to render image: {image_path.name}", styles["ReportNote"]))
+        else:
+            block.append(image)
+        block.append(Spacer(1, 0.08 * inch))
+
+    block.append(PageBreak())
+    return block
+
+
+def build_noise_section_block(
+    noise_label: str,
+    grouped_noise_reports: dict[str, dict[str, AlgorithmMetrics | None]],
+    results_dir: Path,
+    styles,
+    analysis_text: str,
+) -> list[Any]:
+    """Create a compact section for one fixed noise level."""
+    td3_rows: list[list[Any]] = [
+        [
+            Paragraph("Metric", styles["TableCell"]),
+            Paragraph("TD3", styles["TableCell"]),
+            Paragraph("DDPG", styles["TableCell"]),
+        ]
+    ]
+
+    def image_or_missing(path: Path | None):
+        if path is None or not path.exists():
+            return Paragraph("Plot missing", styles["ReportNote"])
+        image = build_scaled_image(path, max_width=3.15 * inch, max_height=2.15 * inch)
+        if image is None:
+            return Paragraph(f"Unable to render image: {path.name}", styles["ReportNote"])
+        return image
+
+    for metric_key, metric_label in [
+        ("reward", "Reward"),
+        ("crash", "Crash Rate"),
+        ("laps", "Laps"),
+    ]:
+        td3_image = locate_plot_file(results_dir, [f"grouped/td3_{noise_label.lower()}_{metric_key}.png"])
+        ddpg_image = locate_plot_file(results_dir, [f"grouped/ddpg_{noise_label.lower()}_{metric_key}.png"])
+
+        td3_rows.append([
+            Paragraph(metric_label, styles["TableCellLeft"]),
+            image_or_missing(td3_image),
+            image_or_missing(ddpg_image),
+        ])
+
+    table = Table(
+        td3_rows,
+        colWidths=[0.8 * inch, 3.3 * inch, 3.3 * inch],
+        repeatRows=1,
+    )
+    table.setStyle(
+        TableStyle(
+            [
+                ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#d9e2f3")),
+                ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+                ("ALIGN", (1, 1), (-1, -1), "CENTER"),
+                ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+                ("GRID", (0, 0), (-1, -1), 0.35, colors.HexColor("#8fa1c1")),
+                ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#f8fafe")]),
+                ("TOPPADDING", (0, 0), (-1, -1), 4),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+            ]
+        )
+    )
+
+    block: list[Any] = [
+        Paragraph(f"Noise Level {noise_label}", styles["SectionHeading"]),
+        Paragraph(
+            "Grouped experiment curves compare R1-R4 within a fixed noise setting. Each plot shows the seed-aggregated mean with light uncertainty shading.",
+            styles["ReportNote"],
+        ),
+        table,
+        Spacer(1, 0.12 * inch),
+        Paragraph("Summary", styles["SubSectionHeading"]),
+        Paragraph(xml_escape(analysis_text), styles["AnalysisBody"]),
+        PageBreak(),
+    ]
+    return block
+
+
+def build_overall_metric_view(metrics_list: list[AlgorithmMetrics | None], algorithm: str) -> dict[str, Any] | None:
+    """Aggregate one algorithm's summary metrics across all experiments."""
+    metrics = [item for item in metrics_list if item is not None]
+    if not metrics:
+        return None
+
+    return {
+        "algorithm": algorithm,
+        "status": "complete",
+        "experiment_count": len(metrics),
+        "avg_reward_last_n_mean": mean_or_none([item.avg_reward_last_n_mean for item in metrics]),
+        "avg_crash_last_n_mean": mean_or_none([item.avg_crash_last_n_mean for item in metrics]),
+        "avg_laps_last_n_mean": mean_or_none([item.avg_laps_last_n_mean for item in metrics]),
+        "reward_std_mean": mean_or_none([item.reward_std_mean for item in metrics]),
+        "convergence_episode_mean": mean_or_none([item.convergence_episode_mean for item in metrics]),
+    }
+
+
+def _score_reward_system_summary(summary: dict[str, Any] | None) -> float:
+    """Score a reward-system summary using reward and stability."""
+    if summary is None:
+        return float("-inf")
+
+    reward = safe_float(summary.get("avg_reward_last_n_mean"), float("-inf"))
+    stability = safe_float(summary.get("reward_std_mean"), float("inf"))
+    if math.isinf(reward) or math.isinf(stability):
+        return float("-inf")
+    return reward - stability
+
+
+def _reward_system_summary(reports: list[ExperimentReport]) -> dict[str, Any] | None:
+    """Summarize one reward system across all noise levels."""
+    td3_metrics = [report.td3 for report in reports if report.td3 is not None]
+    ddpg_metrics = [report.ddpg for report in reports if report.ddpg is not None]
+    if not td3_metrics and not ddpg_metrics:
+        return None
+
+    return {
+        "td3": summarize_algorithm(td3_metrics),
+        "ddpg": summarize_algorithm(ddpg_metrics),
+        "winner_count": {
+            "TD3": sum(1 for report in reports if choose_winner(report.td3, report.ddpg) == "TD3"),
+            "DDPG": sum(1 for report in reports if choose_winner(report.td3, report.ddpg) == "DDPG"),
+        },
+    }
+
+
+def build_noise_level_metrics(noise_label: str, noise_reports: dict[str, dict[str, AlgorithmMetrics | None]]) -> dict[str, Any]:
+    """Build structured metrics for one fixed noise level."""
+    reward_systems: dict[str, Any] = {}
+    td3_summary_metrics = [pair.get("td3") for pair in noise_reports.values() if pair.get("td3") is not None]
+    ddpg_summary_metrics = [pair.get("ddpg") for pair in noise_reports.values() if pair.get("ddpg") is not None]
+    candidate_summaries: list[tuple[str, dict[str, Any] | None]] = []
+
+    for reward_label in REWARD_LEVELS:
+        reward_pair = noise_reports.get(reward_label, {})
+        td3_metrics = reward_pair.get("td3")
+        ddpg_metrics = reward_pair.get("ddpg")
+        reward_systems[reward_label] = {
+            "td3": td3_metrics.to_prompt_dict() if td3_metrics else None,
+            "ddpg": ddpg_metrics.to_prompt_dict() if ddpg_metrics else None,
+            "winner": choose_winner(td3_metrics, ddpg_metrics),
+        }
+
+        td3_score = _score_reward_system_summary(reward_systems[reward_label]["td3"])
+        ddpg_score = _score_reward_system_summary(reward_systems[reward_label]["ddpg"])
+        candidate_score = max(td3_score, ddpg_score)
+        candidate_summaries.append((reward_label, reward_systems[reward_label]))
+
+    best_reward_system = None
+    best_score = float("-inf")
+    for reward_label, summary in candidate_summaries:
+        combined_summary = {
+            "avg_reward_last_n_mean": mean_or_none(
+                [summary[algo].get("avg_reward_last_n_mean") for algo in ("td3", "ddpg") if summary.get(algo)]
+            ),
+            "reward_std_mean": mean_or_none(
+                [summary[algo].get("reward_std_mean") for algo in ("td3", "ddpg") if summary.get(algo)]
+            ),
+        }
+        score = _score_reward_system_summary(combined_summary)
+        if score > best_score:
+            best_score = score
+            best_reward_system = reward_label
+
+    return {
+        "noise_level": noise_label,
+        "td3": summarize_algorithm(td3_summary_metrics),
+        "ddpg": summarize_algorithm(ddpg_summary_metrics),
+        "reward_systems": reward_systems,
+        "best_reward_system": best_reward_system,
+    }
+
+
+def build_comparison_metrics(reports: list[ExperimentReport]) -> dict[str, Any]:
+    """Build structured metrics for the TD3 vs DDPG comparison section."""
+    ordered_reports = [report for report in reports if report.td3 is not None and report.ddpg is not None]
+    td3_summary = summarize_algorithm([report.td3 for report in ordered_reports])
+    ddpg_summary = summarize_algorithm([report.ddpg for report in ordered_reports])
+    td3_score = _score_reward_system_summary(td3_summary)
+    ddpg_score = _score_reward_system_summary(ddpg_summary)
+    winner = "TD3" if td3_score > ddpg_score else "DDPG" if ddpg_score > td3_score else "Tie"
+
+    return {
+        "td3": td3_summary,
+        "ddpg": ddpg_summary,
+        "winner": winner,
+    }
+
+
+def build_key_insight_metrics(reports: list[ExperimentReport]) -> dict[str, Any]:
+    """Build structured metrics for the cross-noise insights section."""
+    reward_summaries = {
+        reward_label: _reward_system_summary(reward_reports)
+        for reward_label, reward_reports in group_reports_by_reward(reports).items()
+    }
+
+    best_reward_system = None
+    best_score = float("-inf")
+    for reward_label, summary in reward_summaries.items():
+        score = _score_reward_system_summary(summary["td3"] if summary else None)
+        if score > best_score:
+            best_score = score
+            best_reward_system = reward_label
+
+    comparison_metrics = build_comparison_metrics(reports)
+    return {
+        "reward_systems": reward_summaries,
+        "best_reward_system": best_reward_system,
+        "overall_algorithm_winner": comparison_metrics.get("winner", "n/a"),
+        "comparison": comparison_metrics,
+    }
+
+
+def build_conclusion_metrics(reports: list[ExperimentReport]) -> dict[str, Any]:
+    """Build structured metrics for the final conclusion section."""
+    comparison_metrics = build_comparison_metrics(reports)
+    reward_metrics = build_key_insight_metrics(reports)
+    return {
+        "best_algorithm": comparison_metrics.get("winner", "n/a"),
+        "best_reward_system": reward_metrics.get("best_reward_system", "n/a"),
+        "comparison": comparison_metrics,
+        "insights": reward_metrics,
+    }
+
+
 def build_report(
     reports: list[ExperimentReport],
     results_dir: Path,
     output_file: Path,
     llm_client: NvidiaLLMClient,
 ) -> None:
-    """Render the full PDF report."""
-    sections = resolve_results_sections(results_dir)
-    comparison_images = scan_image_files(sections.get("comparison", results_dir / "comparison"))
-    td3_images = scan_image_files(sections.get("td3", results_dir / "td3"))
-    ddpg_images = scan_image_files(sections.get("ddpg", results_dir / "ddpg"))
+    """Render the full structured PDF report."""
+    styles = build_report_styles()
+    complete_reports = sorted(
+        [report for report in reports if report.td3 is not None and report.ddpg is not None],
+        key=lambda item: experiment_sort_key(item.experiment),
+    )
+    report_index = {report.experiment: report for report in complete_reports}
+    grouped_by_noise = group_reports_by_reward_and_noise(complete_reports)
 
-    report_index = {report.experiment: report for report in reports}
-    analyses: dict[tuple[str, str], tuple[str, bool]] = {}
+    analysis_cache: dict[tuple[str, str], tuple[str, bool]] = {}
 
-    def get_analysis_for(experiment: str, metric_focus: str) -> tuple[str, bool]:
-        key = (experiment, metric_focus)
-        if key in analyses:
-            return analyses[key]
+    def cached_analysis(cache_key: tuple[str, str], prompt: str, fallback_text: str) -> tuple[str, bool]:
+        if cache_key in analysis_cache:
+            return analysis_cache[cache_key]
+        analysis_cache[cache_key] = collect_analysis_text(llm_client, prompt, fallback_text)
+        return analysis_cache[cache_key]
 
-        report = report_index.get(experiment)
-        td3_metrics = report.td3.to_prompt_dict() if report and report.td3 else None
-        ddpg_metrics = report.ddpg.to_prompt_dict() if report and report.ddpg else None
-        prompt = build_experiment_prompt(experiment, td3_metrics, ddpg_metrics, metric_focus=metric_focus)
-        fallback_text = fallback_analysis(experiment, td3_metrics, ddpg_metrics)
-        analysis = collect_analysis_text(llm_client, prompt, fallback_text)
-        analyses[key] = analysis
-        return analysis
+    generated_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    summary_table, skipped_experiments = build_summary_table(complete_reports, styles)
 
-    summary_prompt = build_summary_prompt(
+    noise_analysis: dict[str, tuple[str, bool]] = {}
+    for noise_label in NOISE_LEVELS:
+        noise_metrics = build_noise_level_metrics(noise_label, grouped_by_noise.get(noise_label, {}))
+        prompt = build_noise_level_prompt(noise_label, noise_metrics)
+        fallback_text = fallback_noise_analysis(noise_label, noise_metrics)
+        noise_analysis[noise_label] = cached_analysis(("noise", noise_label), prompt, fallback_text)
+
+    comparison_metrics = build_comparison_metrics(complete_reports)
+    comparison_prompt = build_algorithm_comparison_prompt(comparison_metrics)
+    comparison_fallback = fallback_comparison_analysis(comparison_metrics)
+    comparison_analysis, comparison_used_llm = cached_analysis(("comparison", "td3_ddpg"), comparison_prompt, comparison_fallback)
+
+    insight_metrics = build_key_insight_metrics(complete_reports)
+    insight_prompt = build_key_insights_prompt(insight_metrics)
+    insight_fallback = fallback_insights_analysis(insight_metrics)
+    insight_analysis, insight_used_llm = cached_analysis(("insight", "overall"), insight_prompt, insight_fallback)
+
+    conclusion_metrics = build_conclusion_metrics(complete_reports)
+    conclusion_prompt = build_final_conclusion_prompt(conclusion_metrics)
+    conclusion_fallback = fallback_conclusion_analysis(conclusion_metrics)
+    conclusion_analysis, conclusion_used_llm = cached_analysis(("conclusion", "final"), conclusion_prompt, conclusion_fallback)
+
+    story: list[Any] = []
+    story.extend(
         [
-            {
-                "experiment": report.experiment,
-                "td3": report.td3.to_prompt_dict() if report.td3 else None,
-                "ddpg": report.ddpg.to_prompt_dict() if report.ddpg else None,
-            }
-            for report in reports
+            Spacer(1, 1.12 * inch),
+            Paragraph("TD3 vs DDPG Performance Analysis in Autonomous Driving Environment", styles["ReportTitle"]),
+            Paragraph(
+                "Structured research-style report built from seed-aggregated logs, grouped noise-level plots, algorithm comparisons, and summary text.",
+                styles["ReportSubtitle"],
+            ),
+            Spacer(1, 0.28 * inch),
+            Table(
+                [
+                    [Paragraph("Project Title", styles["TableCellLeft"]), Paragraph("TD3 vs DDPG Performance Analysis in Autonomous Driving Environment", styles["TableCellLeft"])],
+                    [Paragraph("Description", styles["TableCellLeft"]), Paragraph("Comparison of reward systems across noise levels and algorithm behavior in a driving environment.", styles["TableCellLeft"])],
+                    [Paragraph("Generated", styles["TableCellLeft"]), Paragraph(generated_at, styles["TableCellLeft"])],
+                ],
+                colWidths=[1.35 * inch, 5.25 * inch],
+                hAlign="LEFT",
+            ),
         ]
     )
-    summary_fallback = (
-        "Overall, the report compares TD3 and DDPG across all discovered experiments using the same metrics. "
-        f"TD3 experiments available: {sum(1 for report in reports if report.td3)}. "
-        f"DDPG experiments available: {sum(1 for report in reports if report.ddpg)}."
+    story.append(PageBreak())
+
+    story.append(Paragraph("Summary Metrics", styles["SectionHeading"]))
+    story.append(
+        Paragraph(
+            "Average reward, crash rate, and laps are computed from the last N episodes for each seed, then averaged across seeds. The winner is selected using reward and stability.",
+            styles["ReportNote"],
+        )
     )
-    summary_text, summary_used_llm = collect_analysis_text(llm_client, summary_prompt, summary_fallback)
+    story.append(summary_table)
+    if skipped_experiments:
+        story.append(Spacer(1, 0.10 * inch))
+        story.append(Paragraph(f"Skipped incomplete experiments: {', '.join(skipped_experiments)}.", styles["ReportNote"]))
+    story.append(PageBreak())
 
-    with PdfPages(output_file) as pdf:
-        generated_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    story.append(Paragraph("Analysis by Noise Level", styles["SectionHeading"]))
+    story.append(
+        Paragraph(
+            "Each subsection fixes one noise level and compares R1-R4 for TD3 and DDPG using the grouped plots generated from seed-aggregated curves.",
+            styles["ReportNote"],
+        )
+    )
+    for noise_label in NOISE_LEVELS:
+        noise_reports = grouped_by_noise.get(noise_label, {})
+        if not noise_reports:
+            story.append(Paragraph(f"Noise level {noise_label}: no grouped experiments were available.", styles["ReportNote"]))
+            story.append(PageBreak())
+            continue
 
-        render_text_page(
-            pdf,
-            title="TD3 vs DDPG Report",
-            paragraphs=[
-                "Project: Reinforcement learning comparison for a custom car-racing environment.",
-                f"Generated: {generated_at}",
-                "This report is built from training logs only. Plot images are embedded when available, while the analysis text is generated from structured metrics rather than image inspection.",
-            ],
-            footer=f"Output file: {output_file.name}",
+        analysis_text, used_llm = noise_analysis[noise_label]
+        story.extend(
+            build_noise_section_block(
+                noise_label=noise_label,
+                grouped_noise_reports=noise_reports,
+                results_dir=results_dir,
+                styles=styles,
+                analysis_text=analysis_text,
+            )
         )
 
-        render_text_page(
-            pdf,
-            title="Introduction",
-            paragraphs=[
-                "TD3 and DDPG are deterministic policy-gradient algorithms for continuous control.",
-                "TD3 improves on DDPG by using twin critics, delayed policy updates, and target policy smoothing to reduce overestimation bias and training instability.",
-                "This experiment suite is intended to compare reward growth, convergence speed, and run-to-run stability across multiple reward/noise configurations.",
-            ],
-            footer="All analysis below is based on metrics computed from logs/training_log.jsonl.",
+    story.append(Paragraph("Algorithm Comparison", styles["SectionHeading"]))
+    story.append(
+        Paragraph(
+            "The next pages compare TD3 and DDPG directly using the existing comparison plots, focusing on convergence speed, stability, and final performance.",
+            styles["ReportNote"],
+        )
+    )
+    comparison_files = {
+        "reward": locate_plot_file(results_dir, ["comparison/td3_vs_ddpg_reward.png"]),
+        "crash": locate_plot_file(results_dir, ["comparison/td3_vs_ddpg_crash.png"]),
+        "laps": locate_plot_file(results_dir, ["comparison/td3_vs_ddpg_laps.png"]),
+    }
+    for metric_key, metric_title, metric_label in [
+        ("reward", "TD3 vs DDPG Reward Comparison", "Reward vs Episodes"),
+        ("crash", "TD3 vs DDPG Crash Rate Comparison", "Crash Rate vs Episodes"),
+        ("laps", "TD3 vs DDPG Laps Comparison", "Laps vs Episodes"),
+    ]:
+        story.extend(
+            build_plot_story_block(
+                title=metric_title,
+                image_path=comparison_files[metric_key],
+                caption=f"{metric_label} across all experiments.",
+                styles=styles,
+                analysis_lines=wrap_paragraphs(comparison_analysis, width=92),
+                image_height=4.0 * inch,
+            )
         )
 
-        if comparison_images:
-            for image_path in comparison_images:
-                experiment_id = extract_experiment_from_name(image_path.stem) or "overall"
-                metric_focus = infer_metric_label(image_path.stem)
-                analysis_text, used_llm = get_analysis_for(experiment_id, metric_focus)
-                footer = (
-                    f"Source: {image_path.name} | Analysis source: {'NVIDIA AI API' if used_llm else 'local fallback'}"
-                )
-                render_image_page(
-                    pdf,
-                    title=f"Comparison Plot - {normalize_text(image_path.stem)}",
-                    image_path=image_path,
-                    body_lines=wrap_paragraphs(analysis_text, width=94),
-                    footer=footer,
-                )
-        else:
-            render_text_page(
-                pdf,
-                title="Comparison Plots",
-                paragraphs=[
-                    "No comparison plots were found in the expected results directories.",
-                    "Checked locations include results/comparison and results/plots/comparison.",
-                ],
-                footer="Missing plots are skipped without stopping report generation.",
-            )
-
-        if td3_images:
-            for image_path in td3_images:
-                caption = f"TD3 plot: {normalize_text(image_path.stem)}"
-                render_caption_page(
-                    pdf,
-                    title="TD3 Individual Plot",
-                    image_path=image_path,
-                    caption=caption,
-                    footer=f"Source: {image_path.name}",
-                )
-        else:
-            render_text_page(
-                pdf,
-                title="TD3 Individual Plots",
-                paragraphs=[
-                    "No TD3 plots were found in the expected results directories.",
-                    "Checked locations include results/td3 and results/plots/td3.",
-                ],
-                footer="Missing plots are skipped without stopping report generation.",
-            )
-
-        if ddpg_images:
-            for image_path in ddpg_images:
-                caption = f"DDPG plot: {normalize_text(image_path.stem)}"
-                render_caption_page(
-                    pdf,
-                    title="DDPG Individual Plot",
-                    image_path=image_path,
-                    caption=caption,
-                    footer=f"Source: {image_path.name}",
-                )
-        else:
-            render_text_page(
-                pdf,
-                title="DDPG Individual Plots",
-                paragraphs=[
-                    "No DDPG plots were found in the expected results directories.",
-                    "Checked locations include results/ddpg and results/plots/ddpg.",
-                ],
-                footer="Missing plots are skipped without stopping report generation.",
-            )
-
-        render_text_page(
-            pdf,
-            title="Summary",
-            paragraphs=[
-                summary_text,
-                "The tables below summarise the discovered experiments and the seeds included in each aggregate.",
-            ],
-            footer=f"Analysis source: {'NVIDIA AI API' if summary_used_llm else 'local fallback'}",
+    story.append(Paragraph("Key Aggregate Insights", styles["SectionHeading"]))
+    story.append(
+        Paragraph(
+            "The following section summarizes the cross-noise trends and identifies the best-performing reward function and overall algorithm trend.",
+            styles["ReportNote"],
         )
+    )
+    story.append(Paragraph(xml_escape(insight_analysis), styles["AnalysisBody"]))
+    story.append(PageBreak())
 
-        if reports:
-            summary_lines = ["Experiment overview:"]
-            for report in reports:
-                td3_seeds = len(report.td3.seeds) if report.td3 else 0
-                ddpg_seeds = len(report.ddpg.seeds) if report.ddpg else 0
-                summary_lines.append(
-                    f"- {report.experiment}: TD3 seeds={td3_seeds}, DDPG seeds={ddpg_seeds}"
-                )
+    story.append(Paragraph("Final Conclusion", styles["SectionHeading"]))
+    conclusion_paragraphs = wrap_paragraphs(conclusion_analysis, width=94)
+    for paragraph in conclusion_paragraphs:
+        story.append(Paragraph(xml_escape(paragraph), styles["AnalysisBody"]))
 
-            render_text_page(
-                pdf,
-                title="Experiment Coverage",
-                paragraphs=summary_lines,
-                footer="Incomplete experiments are omitted from aggregate calculations.",
-            )
+    doc = SimpleDocTemplate(
+        str(output_file),
+        pagesize=letter,
+        leftMargin=0.55 * inch,
+        rightMargin=0.55 * inch,
+        topMargin=0.6 * inch,
+        bottomMargin=0.65 * inch,
+        title="TD3 vs DDPG Performance Analysis in Autonomous Driving Environment",
+        author="GitHub Copilot",
+        subject="Research-style TD3/DDPG performance report grouped by noise levels",
+    )
+    doc.build(story, onFirstPage=add_page_number, onLaterPages=add_page_number)
 
 
 def main() -> None:
