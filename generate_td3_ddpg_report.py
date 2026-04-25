@@ -22,12 +22,13 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from textwrap import fill
-from typing import Any
+from typing import Any, Mapping, Sequence
 from urllib import error, request
 from xml.sax.saxutils import escape as xml_escape
 
 import matplotlib.pyplot as plt
 import numpy as np
+from matplotlib.backends.backend_pdf import PdfPages
 from reportlab.lib import colors
 from reportlab.lib.enums import TA_CENTER, TA_LEFT
 from reportlab.lib.pagesizes import letter
@@ -120,22 +121,34 @@ class AlgorithmMetrics:
 
     def to_prompt_dict(self) -> dict[str, Any]:
         """Return a compact serialisable view for LLM prompts."""
+        reward_std = std_from_variance(self.avg_reward_last_n_variance)
+        crash_std = std_from_variance(self.avg_crash_last_n_variance)
+        laps_std = std_from_variance(self.avg_laps_last_n_variance)
+        convergence_std = std_from_variance(self.convergence_episode_variance)
         return {
             "algorithm": self.algorithm,
             "status": self.status,
             "seed_count": len(self.seeds),
             "avg_reward_last_n_mean": self.avg_reward_last_n_mean,
             "avg_reward_last_n_variance": self.avg_reward_last_n_variance,
+            "avg_reward_last_n_std": reward_std,
+            "avg_reward_last_n_mean_pm_std": format_mean_pm(self.avg_reward_last_n_mean, reward_std),
             "avg_crash_last_n_mean": self.avg_crash_last_n_mean,
             "avg_crash_last_n_variance": self.avg_crash_last_n_variance,
+            "avg_crash_last_n_std": crash_std,
+            "avg_crash_last_n_mean_pm_std": format_mean_pm(self.avg_crash_last_n_mean, crash_std, unit="%"),
             "avg_laps_last_n_mean": self.avg_laps_last_n_mean,
             "avg_laps_last_n_variance": self.avg_laps_last_n_variance,
+            "avg_laps_last_n_std": laps_std,
+            "avg_laps_last_n_mean_pm_std": format_mean_pm(self.avg_laps_last_n_mean, laps_std),
             "reward_std_mean": self.reward_std_mean,
             "reward_std_variance": self.reward_std_variance,
             "max_reward_mean": self.max_reward_mean,
             "max_reward_variance": self.max_reward_variance,
             "convergence_episode_mean": self.convergence_episode_mean,
             "convergence_episode_variance": self.convergence_episode_variance,
+            "convergence_episode_std": convergence_std,
+            "convergence_episode_mean_pm_std": format_mean_pm(self.convergence_episode_mean, convergence_std, digits=0),
             "final_reward_mean": self.final_reward_mean,
             "final_reward_variance": self.final_reward_variance,
             "num_episodes_mean": self.num_episodes_mean,
@@ -315,7 +328,7 @@ def compute_seed_metrics(
     )
 
 
-def variance_or_none(values: list[float]) -> float | None:
+def variance_or_none(values: Sequence[float | None]) -> float | None:
     """Return the population variance for a list, or None when unavailable."""
     values = [float(value) for value in values if value is not None]
     if not values:
@@ -325,7 +338,7 @@ def variance_or_none(values: list[float]) -> float | None:
     return float(statistics.pvariance(values))
 
 
-def mean_or_none(values: list[float]) -> float | None:
+def mean_or_none(values: Sequence[float | None]) -> float | None:
     """Return the arithmetic mean for a list, or None when unavailable."""
     values = [float(value) for value in values if value is not None]
     if not values:
@@ -675,17 +688,34 @@ def build_experiment_prompt(
     """Build the concise prompt template for the NVIDIA model."""
     focus_line = f"Metric focus: {metric_focus}\n\n" if metric_focus else ""
     return (
-        "You are analyzing reinforcement learning results for a research report.\n\n"
+        "Analyze the following reinforcement learning results.\n\n"
         f"Experiment: {experiment}\n\n"
         f"{focus_line}"
         f"TD3 metrics:\n{json.dumps(td3_metrics, indent=2, sort_keys=True)}\n\n"
         f"DDPG metrics:\n{json.dumps(ddpg_metrics, indent=2, sort_keys=True)}\n\n"
-        "Compare both algorithms and provide:\n"
-        "1. Which algorithm performs better overall and why\n"
-        "2. Convergence comparison\n"
-        "3. Stability insights\n"
-        "4. Relative crash-rate and lap-performance observations\n\n"
-        "Keep the explanation concise, technical, and evidence-based.\n"
+        "Compare TD3 and DDPG in terms of:\n"
+        "1. Reward performance (mean ± standard deviation)\n"
+        "2. Stability (variance across seeds)\n"
+        "3. Crash rate (safety; mean ± standard deviation)\n"
+        "4. Convergence speed and sample efficiency (lower convergence episode = faster learning)\n"
+        "5. Whether higher reward comes at the cost of higher crash rate\n"
+        "6. Whether differences are consistent across seeds based on variance\n"
+        "7. Which settings balance reward and low crash rate\n\n"
+        "Do NOT declare a single overall winner.\n"
+        "Important:\n"
+        "- Treat crash rate as a primary metric, not a secondary metric\n"
+        "- High reward with high crash rate should be interpreted as unsafe behavior\n"
+        "- Lower standard deviation indicates more stable learning\n"
+        "- Explain which algorithm converges faster and what it implies about training efficiency\n"
+        "Instead:\n"
+        "- Highlight strengths of each algorithm\n"
+        "- Explain trade-offs between performance and stability\n"
+        "- Mention how noise levels affect behavior\n\n"
+        "End with:\n"
+        "Key Takeaways:\n"
+        "- Bullet 1\n"
+        "- Bullet 2\n"
+        "Keep the explanation concise and technical.\n"
         "Do not guess missing values. Base the answer only on the metrics provided."
     )
 
@@ -693,13 +723,27 @@ def build_experiment_prompt(
 def build_summary_prompt(experiment_reports: list[dict[str, Any]]) -> str:
     """Build the final summary prompt across all experiments."""
     return (
-        "You are analyzing reinforcement learning results across multiple experiments for a research paper.\n\n"
+        "Analyze the following reinforcement learning results across multiple experiments.\n\n"
         f"Experiment summaries:\n{json.dumps(experiment_reports, indent=2, sort_keys=True)}\n\n"
-        "Provide a concise technical summary covering:\n"
-        "1. Overall TD3 vs DDPG performance\n"
-        "2. Stability trends across experiments\n"
-        "3. Convergence insights\n"
-        "4. Reward, crash-rate, and lap-trend observations\n\n"
+        "Compare TD3 and DDPG in terms of:\n"
+        "1. Reward performance (mean ± standard deviation)\n"
+        "2. Stability (variance across seeds)\n"
+        "3. Crash rate (safety; mean ± standard deviation)\n"
+        "4. Convergence speed and sample efficiency (lower convergence episode = faster learning)\n"
+        "5. Whether higher reward comes at the cost of higher crash rate\n"
+        "6. Whether differences are consistent across seeds based on variance\n"
+        "7. Safety-performance balance under different noise levels\n\n"
+        "Do NOT declare a single overall winner.\n"
+        "Important:\n"
+        "- Treat crash rate as a primary metric, not a secondary metric\n"
+        "- High reward with high crash rate should be interpreted as unsafe behavior\n"
+        "- Lower standard deviation indicates more stable learning\n"
+        "- Provide clear, technical reasoning\n\n"
+        "End with:\n"
+        "Key Takeaways:\n"
+        "- Bullet 1\n"
+        "- Bullet 2\n\n"
+        "Highlight trade-offs and noise-related behavior changes.\n"
         "Keep the explanation concise, technical, and evidence-based.\n"
         "Do not guess missing values. Base the answer only on the metrics provided."
     )
@@ -708,13 +752,28 @@ def build_summary_prompt(experiment_reports: list[dict[str, Any]]) -> str:
 def build_noise_level_prompt(noise_label: str, noise_metrics: dict[str, Any]) -> str:
     """Build a structured prompt for one noise level section."""
     return (
-        "You are analyzing RL results for a research report.\n\n"
+        "Analyze the following reinforcement learning results.\n\n"
         f"Noise level: {noise_label}\n\n"
         f"Structured metrics:\n{json.dumps(noise_metrics, indent=2, sort_keys=True)}\n\n"
-        "For this noise level, explain:\n"
-        "1. Which reward system performs best\n"
-        "2. Which system is most stable\n"
-        "3. Observed reward, crash-rate, and lap trends\n\n"
+        "For this noise level, compare TD3 and DDPG in terms of:\n"
+        "1. Reward performance (mean ± standard deviation)\n"
+        "2. Stability (variance across seeds)\n"
+        "3. Crash rate (safety; mean ± standard deviation)\n"
+        "4. Convergence speed and sample efficiency (lower convergence episode = faster learning)\n"
+        "5. Whether higher reward comes at the cost of higher crash rate\n"
+        "6. Whether differences are consistent across seeds based on variance\n"
+        "7. Which settings balance reward and low crash rate\n\n"
+        "Do NOT declare a single overall winner.\n"
+        "Important:\n"
+        "- Treat crash rate as a primary metric, not a secondary metric\n"
+        "- High reward with high crash rate should be interpreted as unsafe behavior\n"
+        "- Lower standard deviation indicates more stable learning\n"
+        "- Explain which algorithm converges faster and what it implies about training efficiency\n"
+        "Instead, identify which reward systems show higher reward, which are more stable, and where trade-offs appear.\n"
+        "End with:\n"
+        "Key Takeaways:\n"
+        "- Bullet 1\n"
+        "- Bullet 2\n"
         "Keep the explanation concise and evidence-based."
     )
 
@@ -722,13 +781,26 @@ def build_noise_level_prompt(noise_label: str, noise_metrics: dict[str, Any]) ->
 def build_algorithm_comparison_prompt(comparison_metrics: dict[str, Any]) -> str:
     """Build a structured prompt for TD3 vs DDPG comparison."""
     return (
-        "You are comparing TD3 and DDPG in a research report.\n\n"
+        "Analyze the following reinforcement learning results.\n\n"
         f"Structured metrics:\n{json.dumps(comparison_metrics, indent=2, sort_keys=True)}\n\n"
-        "Explain:\n"
-        "1. Which algorithm performs better overall\n"
-        "2. Convergence speed differences\n"
-        "3. Stability differences\n"
-        "4. Reward, crash-rate, and lap behavior\n\n"
+        "Compare TD3 and DDPG in terms of:\n"
+        "1. Reward performance (mean ± standard deviation)\n"
+        "2. Stability (variance across seeds)\n"
+        "3. Crash rate (safety; mean ± standard deviation)\n"
+        "4. Convergence speed and sample efficiency (lower convergence episode = faster learning)\n"
+        "5. Whether higher reward comes at the cost of higher crash rate\n"
+        "6. Whether differences are consistent across seeds based on variance\n"
+        "7. Which configurations balance reward and low crash rate\n\n"
+        "Do NOT declare a single overall winner.\n"
+        "Important:\n"
+        "- High reward with high crash rate should be interpreted as unsafe behavior\n"
+        "- Lower standard deviation indicates more stable learning\n"
+        "- Explain which algorithm converges faster and what it implies about training efficiency\n"
+        "Highlight strengths of each algorithm and explain trade-offs between reward and robustness.\n"
+        "End with:\n"
+        "Key Takeaways:\n"
+        "- Bullet 1\n"
+        "- Bullet 2\n"
         "Keep the explanation concise and evidence-based."
     )
 
@@ -736,12 +808,22 @@ def build_algorithm_comparison_prompt(comparison_metrics: dict[str, Any]) -> str
 def build_key_insights_prompt(insight_metrics: dict[str, Any]) -> str:
     """Build a structured prompt for cross-noise key insights."""
     return (
-        "You are extracting key insights from structured RL metrics.\n\n"
+        "Analyze the following reinforcement learning results across noise levels.\n\n"
         f"Structured metrics:\n{json.dumps(insight_metrics, indent=2, sort_keys=True)}\n\n"
         "Provide:\n"
-        "1. Best reward function across all noise levels\n"
-        "2. Overall TD3 vs DDPG performance trend\n"
-        "3. Convergence comparison\n\n"
+        "1. Reward-system patterns across noise levels (mean ± standard deviation)\n"
+        "2. TD3 vs DDPG trend by metric (reward, crash, stability, convergence)\n"
+        "3. Safety-aware trade-offs between performance and robustness\n"
+        "4. Seed-consistency insights from variance\n"
+        "5. Sample-efficiency insights from convergence episode\n\n"
+        "Do NOT declare a single overall winner.\n"
+        "Treat crash rate as a primary metric, not a secondary metric.\n"
+        "Important: high reward with high crash rate should be interpreted as unsafe behavior.\n"
+        "Lower standard deviation indicates more stable learning.\n"
+        "End with:\n"
+        "Key Takeaways:\n"
+        "- Bullet 1\n"
+        "- Bullet 2\n"
         "Keep the explanation concise and evidence-based."
     )
 
@@ -752,10 +834,20 @@ def build_final_conclusion_prompt(conclusion_metrics: dict[str, Any]) -> str:
         "You are writing the conclusion for a research-style RL report.\n\n"
         f"Structured metrics:\n{json.dumps(conclusion_metrics, indent=2, sort_keys=True)}\n\n"
         "Summarize:\n"
-        "1. Best algorithm overall\n"
-        "2. Best reward system\n"
-        "3. Effect of noise on performance\n"
-        "4. Main trade-offs\n\n"
+        "1. Trade-offs between reward performance and robustness\n"
+        "2. When TD3 is preferable (stability and safety prioritized)\n"
+        "3. When DDPG is preferable (reward performance prioritized)\n"
+        "4. How crash-rate trends affect safety interpretation\n"
+        "5. Effect of noise on behavior and reliability\n"
+        "6. Convergence and sample-efficiency implications (lower convergence episode = faster learning)\n\n"
+        "Do NOT declare a single overall winner.\n"
+        "Avoid absolute statements such as 'best model'.\n"
+        "Treat crash rate as a primary metric, not a secondary metric.\n"
+        "Interpret stability correctly: lower standard deviation means more stable learning.\n"
+        "End with:\n"
+        "Key Takeaways:\n"
+        "- Bullet 1\n"
+        "- Bullet 2\n"
         "Keep the conclusion concise and evidence-based."
     )
 
@@ -764,12 +856,17 @@ def fallback_noise_analysis(noise_label: str, noise_metrics: dict[str, Any]) -> 
     """Deterministic fallback for one noise level."""
     td3 = noise_metrics.get("td3", {})
     ddpg = noise_metrics.get("ddpg", {})
-    best_reward = noise_metrics.get("best_reward_system", "n/a")
+    highest_reward = noise_metrics.get("highest_reward_system", "n/a")
+    most_stable = noise_metrics.get("most_stable_reward_system", "n/a")
     return (
-        f"Noise {noise_label}: best reward system is {best_reward}. "
-        f"TD3 reward mean {format_table_value(td3.get('avg_reward_last_n_mean'))}, "
-        f"DDPG reward mean {format_table_value(ddpg.get('avg_reward_last_n_mean'))}. "
-        "Stability is reflected by lower reward standard deviation and earlier convergence."
+        f"Noise {noise_label}: higher reward tends to appear in {highest_reward}, while stronger stability tends to appear in {most_stable}. "
+        f"TD3 reward {format_mean_pm(td3.get('avg_reward_last_n_mean'), td3.get('avg_reward_last_n_std'))}, "
+        f"DDPG reward {format_mean_pm(ddpg.get('avg_reward_last_n_mean'), ddpg.get('avg_reward_last_n_std'))}; "
+        f"TD3 crash {format_mean_pm(td3.get('avg_crash_last_n_mean'), td3.get('avg_crash_last_n_std'), unit='%')}, "
+        f"DDPG crash {format_mean_pm(ddpg.get('avg_crash_last_n_mean'), ddpg.get('avg_crash_last_n_std'), unit='%')}.\n"
+        "Key Takeaways:\n"
+        "- Safety must be interpreted jointly with reward; high reward and high crash is unsafe.\n"
+        "- Lower standard deviation indicates more stable learning under this noise level."
     )
 
 
@@ -777,32 +874,47 @@ def fallback_comparison_analysis(comparison_metrics: dict[str, Any]) -> str:
     """Deterministic fallback for TD3 vs DDPG comparison."""
     td3 = comparison_metrics.get("td3", {})
     ddpg = comparison_metrics.get("ddpg", {})
-    winner = comparison_metrics.get("winner", "n/a")
     return (
-        f"Overall comparison favors {winner}. "
-        f"TD3 reward mean {format_table_value(td3.get('avg_reward_last_n_mean'))}, "
-        f"DDPG reward mean {format_table_value(ddpg.get('avg_reward_last_n_mean'))}. "
-        "Earlier convergence and lower reward standard deviation indicate greater stability."
+        f"TD3 reward {format_mean_pm(td3.get('avg_reward_last_n_mean'), td3.get('avg_reward_last_n_std'))}, "
+        f"DDPG reward {format_mean_pm(ddpg.get('avg_reward_last_n_mean'), ddpg.get('avg_reward_last_n_std'))}; "
+        f"TD3 crash {format_mean_pm(td3.get('avg_crash_last_n_mean'), td3.get('avg_crash_last_n_std'), unit='%')}, "
+        f"DDPG crash {format_mean_pm(ddpg.get('avg_crash_last_n_mean'), ddpg.get('avg_crash_last_n_std'), unit='%')}; "
+        f"TD3 convergence {format_mean_pm(td3.get('convergence_episode_mean'), td3.get('convergence_episode_std'), digits=0)}, "
+        f"DDPG convergence {format_mean_pm(ddpg.get('convergence_episode_mean'), ddpg.get('convergence_episode_std'), digits=0)}.\n"
+        "Key Takeaways:\n"
+        "- Lower convergence episode implies faster sample-efficient learning.\n"
+        "- Reward must be interpreted with crash rate to avoid unsafe conclusions."
     )
 
 
 def fallback_insights_analysis(insight_metrics: dict[str, Any]) -> str:
     """Deterministic fallback for key insights across noise levels."""
-    best_reward = insight_metrics.get("best_reward_system", "n/a")
-    best_algo = insight_metrics.get("overall_algorithm_winner", "n/a")
+    highest_reward = insight_metrics.get("highest_reward_system", "n/a")
+    most_stable = insight_metrics.get("most_stable_reward_system", "n/a")
+    lower_crash = insight_metrics.get("lower_crash_algorithm", "n/a")
+    faster_convergence = insight_metrics.get("faster_converging_algorithm", "n/a")
     return (
-        f"Best reward system across all noise levels: {best_reward}. "
-        f"Overall algorithm trend favors {best_algo}. "
-        "Noise generally reduces performance and increases variability."
+        f"Highest reward-system trend across noise levels: {highest_reward}. "
+        f"Most stable reward-system trend: {most_stable}. "
+        f"Lower crash tendency appears in {lower_crash}, while faster convergence appears in {faster_convergence}. "
+        "Noise generally reduces reward and increases variability, emphasizing a trade-off between raw performance and robustness.\n"
+        "Key Takeaways:\n"
+        "- Stability-sensitive deployments should prioritize low variance and low crash behavior.\n"
+        "- Performance-oriented deployments should still verify safety under higher noise."
     )
 
 
 def fallback_conclusion_analysis(conclusion_metrics: dict[str, Any]) -> str:
     """Deterministic fallback for the final conclusion."""
     return (
-        f"Best algorithm overall: {conclusion_metrics.get('best_algorithm', 'n/a')}. "
-        f"Best reward system: {conclusion_metrics.get('best_reward_system', 'n/a')}. "
-        "Higher noise levels generally reduce reward and increase instability."
+        "The results indicate a trade-off between performance and robustness. "
+        f"Highest reward trend is associated with {conclusion_metrics.get('highest_reward_system', 'n/a')}, "
+        f"while greater stability trend is associated with {conclusion_metrics.get('most_stable_reward_system', 'n/a')}. "
+        "DDPG can achieve higher rewards and faster convergence in several settings, while TD3 can provide more stable learning and improved safety in certain conditions. "
+        "Higher noise levels generally reduce reward and increase instability.\n"
+        "Key Takeaways:\n"
+        "- TD3 is preferable when stability and safety are prioritized.\n"
+        "- DDPG is preferable when higher reward is prioritized and crash behavior remains acceptable."
     )
 
 
@@ -904,15 +1016,11 @@ def fallback_analysis(experiment: str, td3_metrics: dict[str, Any] | None, ddpg_
         ddpg_avg = safe_float(ddpg_metrics.get("avg_reward_last_n_mean"), 0.0)
         td3_stability = safe_float(td3_metrics.get("reward_std_mean"), 0.0)
         ddpg_stability = safe_float(ddpg_metrics.get("reward_std_mean"), 0.0)
-        if td3_avg > ddpg_avg:
-            winner = "TD3"
-        elif ddpg_avg > td3_avg:
-            winner = "DDPG"
-        else:
-            winner = "neither"
-
         lines.append(
-            f"Average-reward comparison favors {winner}. Reward stability is estimated from the seed-level reward standard deviation ({format_number(td3_stability)} vs {format_number(ddpg_stability)})."
+            "The metrics show a trade-off between reward and robustness: "
+            f"TD3 reward {format_number(td3_avg)} vs DDPG reward {format_number(ddpg_avg)}, "
+            f"with reward standard deviation {format_number(td3_stability)} vs {format_number(ddpg_stability)}. "
+            "Lower standard deviation indicates more stable learning."
         )
 
     return " ".join(lines)
@@ -934,7 +1042,7 @@ def collect_analysis_text(
         return fallback_text, False
 
 
-def build_report_styles() -> dict[str, ParagraphStyle]:
+def build_report_styles() -> Any:
     """Create a compact style set for the research-style PDF."""
     styles = getSampleStyleSheet()
     styles.add(
@@ -1088,40 +1196,114 @@ def format_table_value(value: Any, digits: int = 2) -> str:
     return f"{numeric:.{digits}f}"
 
 
-def score_algorithm(metrics: AlgorithmMetrics | None) -> float:
-    """Score an algorithm using reward and stability."""
-    if metrics is None:
-        return float("-inf")
+def std_from_variance(variance: Any) -> float | None:
+    """Compute standard deviation from variance with numeric guards."""
+    if variance is None:
+        return None
+    try:
+        numeric = float(variance)
+    except (TypeError, ValueError):
+        return None
+    if math.isnan(numeric) or math.isinf(numeric) or numeric < 0.0:
+        return None
+    return float(math.sqrt(numeric))
 
-    reward = safe_float(metrics.avg_reward_last_n_mean, float("-inf"))
-    stability = safe_float(metrics.reward_std_mean, float("inf"))
-    if math.isinf(reward) or math.isinf(stability):
-        return float("-inf")
-    return reward - stability
 
-
-def choose_winner(td3_metrics: AlgorithmMetrics | None, ddpg_metrics: AlgorithmMetrics | None) -> str:
-    """Select a per-experiment winner using reward and stability."""
-    if td3_metrics is None and ddpg_metrics is None:
+def format_mean_pm(mean_value: Any, std_value: Any, digits: int = 2, unit: str = "") -> str:
+    """Format a publication-style mean ± std string."""
+    mean_text = format_table_value(mean_value, digits=digits)
+    std_text = format_table_value(std_value, digits=digits)
+    if mean_text == "n/a":
         return "n/a"
-    if td3_metrics is None:
-        return "DDPG"
-    if ddpg_metrics is None:
-        return "TD3"
+    if std_text == "n/a":
+        return f"{mean_text}{unit}"
+    return f"{mean_text} ± {std_text}{unit}"
 
-    td3_score = score_algorithm(td3_metrics)
-    ddpg_score = score_algorithm(ddpg_metrics)
-    if abs(td3_score - ddpg_score) <= 1e-9:
-        td3_crash = safe_float(td3_metrics.avg_crash_last_n_mean, float("inf"))
-        ddpg_crash = safe_float(ddpg_metrics.avg_crash_last_n_mean, float("inf"))
-        if abs(td3_crash - ddpg_crash) <= 1e-9:
-            td3_conv = safe_float(td3_metrics.convergence_episode_mean, float("inf"))
-            ddpg_conv = safe_float(ddpg_metrics.convergence_episode_mean, float("inf"))
-            if abs(td3_conv - ddpg_conv) <= 1e-9:
-                return "Tie"
-            return "TD3" if td3_conv < ddpg_conv else "DDPG"
-        return "TD3" if td3_crash < ddpg_crash else "DDPG"
-    return "TD3" if td3_score > ddpg_score else "DDPG"
+
+def split_key_takeaways(analysis_text: str) -> tuple[str, list[str]]:
+    """Split an analysis block into narrative body and takeaway bullets."""
+    lines = [line.strip() for line in str(analysis_text).splitlines() if line.strip()]
+    if not lines:
+        return "", []
+
+    marker_index = -1
+    for idx, line in enumerate(lines):
+        if line.lower().startswith("key takeaways"):
+            marker_index = idx
+            break
+
+    if marker_index < 0:
+        return "\n".join(lines), []
+
+    body_lines = lines[:marker_index]
+    bullets: list[str] = []
+    for line in lines[marker_index + 1 :]:
+        cleaned = line.lstrip("-*").strip()
+        if cleaned:
+            bullets.append(cleaned)
+    return "\n".join(body_lines), bullets[:3]
+
+
+def ensure_takeaways(analysis_text: str, fallback_takeaways: list[str]) -> tuple[str, list[str]]:
+    """Guarantee at least two key takeaways for each analysis section."""
+    body, bullets = split_key_takeaways(analysis_text)
+    if len(bullets) >= 2:
+        return body, bullets
+    merged = bullets + [item for item in fallback_takeaways if item]
+    deduped: list[str] = []
+    for item in merged:
+        if item not in deduped:
+            deduped.append(item)
+    return body, deduped[:3]
+
+
+def build_noise_takeaways(noise_metrics: dict[str, Any]) -> list[str]:
+    """Create concise noise-level takeaways from structured metrics."""
+    td3 = noise_metrics.get("td3") or {}
+    ddpg = noise_metrics.get("ddpg") or {}
+    return [
+        (
+            "Higher reward trend: "
+            f"TD3 {format_mean_pm(td3.get('avg_reward_last_n_mean'), td3.get('avg_reward_last_n_std'))}, "
+            f"DDPG {format_mean_pm(ddpg.get('avg_reward_last_n_mean'), ddpg.get('avg_reward_last_n_std'))}."
+        ),
+        (
+            "Safety and stability trend: "
+            f"TD3 crash {format_mean_pm(td3.get('avg_crash_last_n_mean'), td3.get('avg_crash_last_n_std'), unit='%')}, "
+            f"DDPG crash {format_mean_pm(ddpg.get('avg_crash_last_n_mean'), ddpg.get('avg_crash_last_n_std'), unit='%')}; "
+            "lower crash and lower standard deviation indicate more robust behavior."
+        ),
+    ]
+
+
+def build_comparison_takeaways(comparison_metrics: dict[str, Any]) -> list[str]:
+    """Create concise TD3-vs-DDPG takeaways from aggregate metrics."""
+    td3 = comparison_metrics.get("td3") or {}
+    ddpg = comparison_metrics.get("ddpg") or {}
+    return [
+        (
+            "Sample efficiency: lower convergence episode means faster learning; "
+            f"TD3 {format_mean_pm(td3.get('convergence_episode_mean'), td3.get('convergence_episode_std'), digits=0)}, "
+            f"DDPG {format_mean_pm(ddpg.get('convergence_episode_mean'), ddpg.get('convergence_episode_std'), digits=0)}."
+        ),
+        (
+            "Reward-safety trade-off: "
+            f"TD3 reward {format_mean_pm(td3.get('avg_reward_last_n_mean'), td3.get('avg_reward_last_n_std'))}, "
+            f"DDPG reward {format_mean_pm(ddpg.get('avg_reward_last_n_mean'), ddpg.get('avg_reward_last_n_std'))}; "
+            f"TD3 crash {format_mean_pm(td3.get('avg_crash_last_n_mean'), td3.get('avg_crash_last_n_std'), unit='%')}, "
+            f"DDPG crash {format_mean_pm(ddpg.get('avg_crash_last_n_mean'), ddpg.get('avg_crash_last_n_std'), unit='%')}."
+        ),
+    ]
+
+
+def pick_label_by_metric(items: dict[str, float | None], prefer: str = "higher") -> str | None:
+    """Pick the label with the best available metric value without cross-metric scoring."""
+    valid = [(label, float(value)) for label, value in items.items() if value is not None and not math.isnan(float(value))]
+    if not valid:
+        return None
+    if prefer == "lower":
+        return min(valid, key=lambda pair: pair[1])[0]
+    return max(valid, key=lambda pair: pair[1])[0]
 
 
 def experiment_sort_key(experiment_id: str) -> tuple[int, int, str]:
@@ -1167,9 +1349,11 @@ def parse_experiment_components(experiment_id: str) -> tuple[str | None, str | N
     return match.group(1), match.group(2)
 
 
-def group_reports_by_reward_and_noise(reports: list[ExperimentReport]) -> dict[str, dict[str, dict[str, AlgorithmMetrics]]]:
+def group_reports_by_reward_and_noise(
+    reports: list[ExperimentReport],
+) -> dict[str, dict[str, dict[str, AlgorithmMetrics | None]]]:
     """Group experiment reports by noise level and reward system."""
-    grouped: dict[str, dict[str, dict[str, AlgorithmMetrics]]] = {
+    grouped: dict[str, dict[str, dict[str, AlgorithmMetrics | None]]] = {
         "N1": {},
         "N2": {},
         "N3": {},
@@ -1199,19 +1383,32 @@ def group_reports_by_reward(reports: list[ExperimentReport]) -> dict[str, list[E
     return grouped
 
 
-def summarize_algorithm(metrics_list: list[AlgorithmMetrics | None]) -> dict[str, Any] | None:
+def summarize_algorithm(metrics_list: Sequence[AlgorithmMetrics | None]) -> dict[str, Any] | None:
     """Summarize one algorithm across a collection of experiments."""
     metrics = [item for item in metrics_list if item is not None]
     if not metrics:
         return None
 
+    reward_var = variance_or_none([item.avg_reward_last_n_mean for item in metrics])
+    crash_var = variance_or_none([item.avg_crash_last_n_mean for item in metrics])
+    laps_var = variance_or_none([item.avg_laps_last_n_mean for item in metrics])
+    conv_var = variance_or_none([item.convergence_episode_mean for item in metrics])
+
     return {
         "experiment_count": len(metrics),
         "avg_reward_last_n_mean": mean_or_none([item.avg_reward_last_n_mean for item in metrics]),
+        "avg_reward_last_n_variance": reward_var,
+        "avg_reward_last_n_std": std_from_variance(reward_var),
         "avg_crash_last_n_mean": mean_or_none([item.avg_crash_last_n_mean for item in metrics]),
+        "avg_crash_last_n_variance": crash_var,
+        "avg_crash_last_n_std": std_from_variance(crash_var),
         "avg_laps_last_n_mean": mean_or_none([item.avg_laps_last_n_mean for item in metrics]),
+        "avg_laps_last_n_variance": laps_var,
+        "avg_laps_last_n_std": std_from_variance(laps_var),
         "reward_std_mean": mean_or_none([item.reward_std_mean for item in metrics]),
         "convergence_episode_mean": mean_or_none([item.convergence_episode_mean for item in metrics]),
+        "convergence_episode_variance": conv_var,
+        "convergence_episode_std": std_from_variance(conv_var),
     }
 
 
@@ -1224,10 +1421,6 @@ def summarize_reward_systems(reports: list[ExperimentReport]) -> dict[str, dict[
         summary[reward_label] = {
             "td3": summarize_algorithm([report.td3 for report in reward_reports]),
             "ddpg": summarize_algorithm([report.ddpg for report in reward_reports]),
-            "winner_count": {
-                "TD3": sum(1 for report in reward_reports if choose_winner(report.td3, report.ddpg) == "TD3"),
-                "DDPG": sum(1 for report in reward_reports if choose_winner(report.td3, report.ddpg) == "DDPG"),
-            },
         }
 
     return summary
@@ -1250,12 +1443,17 @@ def algorithm_metrics_lines(metrics: AlgorithmMetrics | None) -> list[str]:
     if metrics is None:
         return ["No metrics available."]
 
+    reward_std = std_from_variance(metrics.avg_reward_last_n_variance)
+    crash_std = std_from_variance(metrics.avg_crash_last_n_variance)
+    laps_std = std_from_variance(metrics.avg_laps_last_n_variance)
+    convergence_std = std_from_variance(metrics.convergence_episode_variance)
+
     return [
-        f"Avg reward (last N): {format_table_value(metrics.avg_reward_last_n_mean)}",
-        f"Crash rate (last N): {format_percentage(metrics.avg_crash_last_n_mean)}",
-        f"Laps per episode (last N): {format_table_value(metrics.avg_laps_last_n_mean)}",
+        f"Avg reward (last N): {format_mean_pm(metrics.avg_reward_last_n_mean, reward_std)}",
+        f"Crash rate (last N): {format_mean_pm(metrics.avg_crash_last_n_mean, crash_std, unit='%')}",
+        f"Laps per episode (last N): {format_mean_pm(metrics.avg_laps_last_n_mean, laps_std)}",
         f"Reward std (stability): {format_table_value(metrics.reward_std_mean)}",
-        f"Convergence episode: {format_table_value(metrics.convergence_episode_mean, digits=0)}",
+        f"Convergence episode: {format_mean_pm(metrics.convergence_episode_mean, convergence_std, digits=0)}",
     ]
 
 
@@ -1264,13 +1462,12 @@ def build_summary_table_rows(reports: list[ExperimentReport], styles) -> tuple[l
     rows: list[list[Paragraph]] = [
         [
             Paragraph("Experiment", styles["TableCell"]),
-            Paragraph("TD3 Reward", styles["TableCell"]),
-            Paragraph("DDPG Reward", styles["TableCell"]),
-            Paragraph("TD3 Crash", styles["TableCell"]),
-            Paragraph("DDPG Crash", styles["TableCell"]),
-            Paragraph("TD3 Laps", styles["TableCell"]),
-            Paragraph("DDPG Laps", styles["TableCell"]),
-            Paragraph("Winner", styles["TableCell"]),
+            Paragraph("TD3 Reward ± Std", styles["TableCell"]),
+            Paragraph("DDPG Reward ± Std", styles["TableCell"]),
+            Paragraph("TD3 Crash ± Std", styles["TableCell"]),
+            Paragraph("DDPG Crash ± Std", styles["TableCell"]),
+            Paragraph("TD3 Conv", styles["TableCell"]),
+            Paragraph("DDPG Conv", styles["TableCell"]),
         ]
     ]
     skipped: list[str] = []
@@ -1280,17 +1477,49 @@ def build_summary_table_rows(reports: list[ExperimentReport], styles) -> tuple[l
             skipped.append(report.experiment)
             continue
 
-        winner = choose_winner(report.td3, report.ddpg)
         rows.append(
             [
                 Paragraph(report.experiment, styles["TableCellLeft"]),
-                Paragraph(format_table_value(report.td3.avg_reward_last_n_mean), styles["TableCell"]),
-                Paragraph(format_table_value(report.ddpg.avg_reward_last_n_mean), styles["TableCell"]),
-                Paragraph(format_percentage(report.td3.avg_crash_last_n_mean), styles["TableCell"]),
-                Paragraph(format_percentage(report.ddpg.avg_crash_last_n_mean), styles["TableCell"]),
-                Paragraph(format_table_value(report.td3.avg_laps_last_n_mean), styles["TableCell"]),
-                Paragraph(format_table_value(report.ddpg.avg_laps_last_n_mean), styles["TableCell"]),
-                Paragraph(f"<b>{winner}</b>", styles["TableCell"]),
+                Paragraph(
+                    format_mean_pm(report.td3.avg_reward_last_n_mean, std_from_variance(report.td3.avg_reward_last_n_variance)),
+                    styles["TableCell"],
+                ),
+                Paragraph(
+                    format_mean_pm(report.ddpg.avg_reward_last_n_mean, std_from_variance(report.ddpg.avg_reward_last_n_variance)),
+                    styles["TableCell"],
+                ),
+                Paragraph(
+                    format_mean_pm(
+                        report.td3.avg_crash_last_n_mean,
+                        std_from_variance(report.td3.avg_crash_last_n_variance),
+                        unit="%",
+                    ),
+                    styles["TableCell"],
+                ),
+                Paragraph(
+                    format_mean_pm(
+                        report.ddpg.avg_crash_last_n_mean,
+                        std_from_variance(report.ddpg.avg_crash_last_n_variance),
+                        unit="%",
+                    ),
+                    styles["TableCell"],
+                ),
+                Paragraph(
+                    format_mean_pm(
+                        report.td3.convergence_episode_mean,
+                        std_from_variance(report.td3.convergence_episode_variance),
+                        digits=0,
+                    ),
+                    styles["TableCell"],
+                ),
+                Paragraph(
+                    format_mean_pm(
+                        report.ddpg.convergence_episode_mean,
+                        std_from_variance(report.ddpg.convergence_episode_variance),
+                        digits=0,
+                    ),
+                    styles["TableCell"],
+                ),
             ]
         )
 
@@ -1302,7 +1531,7 @@ def build_summary_table(reports: list[ExperimentReport], styles) -> tuple[Table,
     rows, skipped = build_summary_table_rows(reports, styles)
     table = Table(
         rows,
-        colWidths=[1.05 * inch, 0.82 * inch, 0.82 * inch, 0.78 * inch, 0.78 * inch, 0.78 * inch, 0.78 * inch, 0.65 * inch],
+        colWidths=[1.1 * inch, 1.0 * inch, 1.0 * inch, 0.95 * inch, 0.95 * inch, 0.9 * inch, 0.9 * inch],
         repeatRows=1,
     )
     table.setStyle(
@@ -1331,6 +1560,7 @@ def build_plot_story_block(
     caption: str,
     styles,
     analysis_lines: list[str] | None = None,
+    takeaway_lines: list[str] | None = None,
     image_height: float = 4.5 * inch,
 ):
     """Create a plot page block with optional analysis text below the figure."""
@@ -1350,6 +1580,11 @@ def build_plot_story_block(
     if analysis_lines:
         analysis_text = "<br/>".join(xml_escape(line) for line in analysis_lines)
         block.append(Paragraph(analysis_text, styles["AnalysisBody"]))
+    if takeaway_lines:
+        block.append(Spacer(1, 0.05 * inch))
+        block.append(Paragraph("Key Takeaways", styles["SubSectionHeading"]))
+        for point in takeaway_lines[:3]:
+            block.append(Paragraph(f"- {xml_escape(point)}", styles["AnalysisBody"]))
     block.append(PageBreak())
     return block
 
@@ -1393,10 +1628,11 @@ def build_experiment_plot_block(
 
 def build_noise_section_block(
     noise_label: str,
-    grouped_noise_reports: dict[str, dict[str, AlgorithmMetrics | None]],
+    grouped_noise_reports: Mapping[str, Mapping[str, AlgorithmMetrics | None]],
     results_dir: Path,
     styles,
     analysis_text: str,
+    takeaway_lines: list[str] | None = None,
 ) -> list[Any]:
     """Create a compact section for one fixed noise level."""
     td3_rows: list[list[Any]] = [
@@ -1459,12 +1695,17 @@ def build_noise_section_block(
         Spacer(1, 0.12 * inch),
         Paragraph("Summary", styles["SubSectionHeading"]),
         Paragraph(xml_escape(analysis_text), styles["AnalysisBody"]),
-        PageBreak(),
     ]
+    if takeaway_lines:
+        block.append(Spacer(1, 0.04 * inch))
+        block.append(Paragraph("Key Takeaways", styles["SubSectionHeading"]))
+        for point in takeaway_lines[:3]:
+            block.append(Paragraph(f"- {xml_escape(point)}", styles["AnalysisBody"]))
+    block.append(PageBreak())
     return block
 
 
-def build_overall_metric_view(metrics_list: list[AlgorithmMetrics | None], algorithm: str) -> dict[str, Any] | None:
+def build_overall_metric_view(metrics_list: Sequence[AlgorithmMetrics | None], algorithm: str) -> dict[str, Any] | None:
     """Aggregate one algorithm's summary metrics across all experiments."""
     metrics = [item for item in metrics_list if item is not None]
     if not metrics:
@@ -1482,18 +1723,6 @@ def build_overall_metric_view(metrics_list: list[AlgorithmMetrics | None], algor
     }
 
 
-def _score_reward_system_summary(summary: dict[str, Any] | None) -> float:
-    """Score a reward-system summary using reward and stability."""
-    if summary is None:
-        return float("-inf")
-
-    reward = safe_float(summary.get("avg_reward_last_n_mean"), float("-inf"))
-    stability = safe_float(summary.get("reward_std_mean"), float("inf"))
-    if math.isinf(reward) or math.isinf(stability):
-        return float("-inf")
-    return reward - stability
-
-
 def _reward_system_summary(reports: list[ExperimentReport]) -> dict[str, Any] | None:
     """Summarize one reward system across all noise levels."""
     td3_metrics = [report.td3 for report in reports if report.td3 is not None]
@@ -1504,19 +1733,19 @@ def _reward_system_summary(reports: list[ExperimentReport]) -> dict[str, Any] | 
     return {
         "td3": summarize_algorithm(td3_metrics),
         "ddpg": summarize_algorithm(ddpg_metrics),
-        "winner_count": {
-            "TD3": sum(1 for report in reports if choose_winner(report.td3, report.ddpg) == "TD3"),
-            "DDPG": sum(1 for report in reports if choose_winner(report.td3, report.ddpg) == "DDPG"),
-        },
     }
 
 
-def build_noise_level_metrics(noise_label: str, noise_reports: dict[str, dict[str, AlgorithmMetrics | None]]) -> dict[str, Any]:
+def build_noise_level_metrics(
+    noise_label: str,
+    noise_reports: Mapping[str, Mapping[str, AlgorithmMetrics | None]],
+) -> dict[str, Any]:
     """Build structured metrics for one fixed noise level."""
     reward_systems: dict[str, Any] = {}
     td3_summary_metrics = [pair.get("td3") for pair in noise_reports.values() if pair.get("td3") is not None]
     ddpg_summary_metrics = [pair.get("ddpg") for pair in noise_reports.values() if pair.get("ddpg") is not None]
-    candidate_summaries: list[tuple[str, dict[str, Any] | None]] = []
+    reward_candidates: dict[str, float | None] = {}
+    stability_candidates: dict[str, float | None] = {}
 
     for reward_label in REWARD_LEVELS:
         reward_pair = noise_reports.get(reward_label, {})
@@ -1525,36 +1754,30 @@ def build_noise_level_metrics(noise_label: str, noise_reports: dict[str, dict[st
         reward_systems[reward_label] = {
             "td3": td3_metrics.to_prompt_dict() if td3_metrics else None,
             "ddpg": ddpg_metrics.to_prompt_dict() if ddpg_metrics else None,
-            "winner": choose_winner(td3_metrics, ddpg_metrics),
         }
 
-        td3_score = _score_reward_system_summary(reward_systems[reward_label]["td3"])
-        ddpg_score = _score_reward_system_summary(reward_systems[reward_label]["ddpg"])
-        candidate_score = max(td3_score, ddpg_score)
-        candidate_summaries.append((reward_label, reward_systems[reward_label]))
+        reward_values = []
+        stability_values = []
+        if td3_metrics is not None:
+            reward_values.append(td3_metrics.avg_reward_last_n_mean)
+            stability_values.append(td3_metrics.reward_std_mean)
+        if ddpg_metrics is not None:
+            reward_values.append(ddpg_metrics.avg_reward_last_n_mean)
+            stability_values.append(ddpg_metrics.reward_std_mean)
 
-    best_reward_system = None
-    best_score = float("-inf")
-    for reward_label, summary in candidate_summaries:
-        combined_summary = {
-            "avg_reward_last_n_mean": mean_or_none(
-                [summary[algo].get("avg_reward_last_n_mean") for algo in ("td3", "ddpg") if summary.get(algo)]
-            ),
-            "reward_std_mean": mean_or_none(
-                [summary[algo].get("reward_std_mean") for algo in ("td3", "ddpg") if summary.get(algo)]
-            ),
-        }
-        score = _score_reward_system_summary(combined_summary)
-        if score > best_score:
-            best_score = score
-            best_reward_system = reward_label
+        reward_candidates[reward_label] = mean_or_none(reward_values)
+        stability_candidates[reward_label] = mean_or_none(stability_values)
+
+    highest_reward_system = pick_label_by_metric(reward_candidates, prefer="higher")
+    most_stable_reward_system = pick_label_by_metric(stability_candidates, prefer="lower")
 
     return {
         "noise_level": noise_label,
         "td3": summarize_algorithm(td3_summary_metrics),
         "ddpg": summarize_algorithm(ddpg_summary_metrics),
         "reward_systems": reward_systems,
-        "best_reward_system": best_reward_system,
+        "highest_reward_system": highest_reward_system,
+        "most_stable_reward_system": most_stable_reward_system,
     }
 
 
@@ -1563,14 +1786,26 @@ def build_comparison_metrics(reports: list[ExperimentReport]) -> dict[str, Any]:
     ordered_reports = [report for report in reports if report.td3 is not None and report.ddpg is not None]
     td3_summary = summarize_algorithm([report.td3 for report in ordered_reports])
     ddpg_summary = summarize_algorithm([report.ddpg for report in ordered_reports])
-    td3_score = _score_reward_system_summary(td3_summary)
-    ddpg_score = _score_reward_system_summary(ddpg_summary)
-    winner = "TD3" if td3_score > ddpg_score else "DDPG" if ddpg_score > td3_score else "Tie"
 
     return {
         "td3": td3_summary,
         "ddpg": ddpg_summary,
-        "winner": winner,
+        "reward_gap_td3_minus_ddpg": None
+        if td3_summary is None or ddpg_summary is None
+        else safe_float(td3_summary.get("avg_reward_last_n_mean"), 0.0)
+        - safe_float(ddpg_summary.get("avg_reward_last_n_mean"), 0.0),
+        "crash_gap_td3_minus_ddpg": None
+        if td3_summary is None or ddpg_summary is None
+        else safe_float(td3_summary.get("avg_crash_last_n_mean"), 0.0)
+        - safe_float(ddpg_summary.get("avg_crash_last_n_mean"), 0.0),
+        "stability_gap_td3_minus_ddpg": None
+        if td3_summary is None or ddpg_summary is None
+        else safe_float(td3_summary.get("reward_std_mean"), 0.0)
+        - safe_float(ddpg_summary.get("reward_std_mean"), 0.0),
+        "convergence_gap_td3_minus_ddpg": None
+        if td3_summary is None or ddpg_summary is None
+        else safe_float(td3_summary.get("convergence_episode_mean"), 0.0)
+        - safe_float(ddpg_summary.get("convergence_episode_mean"), 0.0),
     }
 
 
@@ -1581,19 +1816,61 @@ def build_key_insight_metrics(reports: list[ExperimentReport]) -> dict[str, Any]
         for reward_label, reward_reports in group_reports_by_reward(reports).items()
     }
 
-    best_reward_system = None
-    best_score = float("-inf")
+    highest_reward_system = None
+    best_reward = float("-inf")
+    most_stable_reward_system = None
+    best_stability = float("inf")
+
     for reward_label, summary in reward_summaries.items():
-        score = _score_reward_system_summary(summary["td3"] if summary else None)
-        if score > best_score:
-            best_score = score
-            best_reward_system = reward_label
+        if summary is None:
+            continue
+        reward_value = mean_or_none(
+            [
+                summary[algo].get("avg_reward_last_n_mean")
+                for algo in ("td3", "ddpg")
+                if summary.get(algo) is not None
+            ]
+        )
+        stability_value = mean_or_none(
+            [
+                summary[algo].get("reward_std_mean")
+                for algo in ("td3", "ddpg")
+                if summary.get(algo) is not None
+            ]
+        )
+
+        if reward_value is not None and reward_value > best_reward:
+            best_reward = reward_value
+            highest_reward_system = reward_label
+        if stability_value is not None and stability_value < best_stability:
+            best_stability = stability_value
+            most_stable_reward_system = reward_label
 
     comparison_metrics = build_comparison_metrics(reports)
+
+    td3_summary = comparison_metrics.get("td3") or {}
+    ddpg_summary = comparison_metrics.get("ddpg") or {}
+    lower_crash_algorithm = pick_label_by_metric(
+        {
+            "TD3": td3_summary.get("avg_crash_last_n_mean"),
+            "DDPG": ddpg_summary.get("avg_crash_last_n_mean"),
+        },
+        prefer="lower",
+    )
+    faster_converging_algorithm = pick_label_by_metric(
+        {
+            "TD3": td3_summary.get("convergence_episode_mean"),
+            "DDPG": ddpg_summary.get("convergence_episode_mean"),
+        },
+        prefer="lower",
+    )
+
     return {
         "reward_systems": reward_summaries,
-        "best_reward_system": best_reward_system,
-        "overall_algorithm_winner": comparison_metrics.get("winner", "n/a"),
+        "highest_reward_system": highest_reward_system,
+        "most_stable_reward_system": most_stable_reward_system,
+        "lower_crash_algorithm": lower_crash_algorithm,
+        "faster_converging_algorithm": faster_converging_algorithm,
         "comparison": comparison_metrics,
     }
 
@@ -1603,8 +1880,10 @@ def build_conclusion_metrics(reports: list[ExperimentReport]) -> dict[str, Any]:
     comparison_metrics = build_comparison_metrics(reports)
     reward_metrics = build_key_insight_metrics(reports)
     return {
-        "best_algorithm": comparison_metrics.get("winner", "n/a"),
-        "best_reward_system": reward_metrics.get("best_reward_system", "n/a"),
+        "highest_reward_system": reward_metrics.get("highest_reward_system", "n/a"),
+        "most_stable_reward_system": reward_metrics.get("most_stable_reward_system", "n/a"),
+        "lower_crash_algorithm": reward_metrics.get("lower_crash_algorithm", "n/a"),
+        "faster_converging_algorithm": reward_metrics.get("faster_converging_algorithm", "n/a"),
         "comparison": comparison_metrics,
         "insights": reward_metrics,
     }
@@ -1637,8 +1916,10 @@ def build_report(
     summary_table, skipped_experiments = build_summary_table(complete_reports, styles)
 
     noise_analysis: dict[str, tuple[str, bool]] = {}
+    noise_metrics_by_label: dict[str, dict[str, Any]] = {}
     for noise_label in NOISE_LEVELS:
         noise_metrics = build_noise_level_metrics(noise_label, grouped_by_noise.get(noise_label, {}))
+        noise_metrics_by_label[noise_label] = noise_metrics
         prompt = build_noise_level_prompt(noise_label, noise_metrics)
         fallback_text = fallback_noise_analysis(noise_label, noise_metrics)
         noise_analysis[noise_label] = cached_analysis(("noise", noise_label), prompt, fallback_text)
@@ -1684,7 +1965,7 @@ def build_report(
     story.append(Paragraph("Summary Metrics", styles["SectionHeading"]))
     story.append(
         Paragraph(
-            "Average reward, crash rate, and laps are computed from the last N episodes for each seed, then averaged across seeds. The winner is selected using reward and stability.",
+            "Metrics are reported as mean ± standard deviation where available. Crash rate is treated as a primary safety metric, and lower convergence episode indicates faster sample-efficient learning.",
             styles["ReportNote"],
         )
     )
@@ -1709,13 +1990,18 @@ def build_report(
             continue
 
         analysis_text, used_llm = noise_analysis[noise_label]
+        noise_body, noise_takeaways = ensure_takeaways(
+            analysis_text,
+            build_noise_takeaways(noise_metrics_by_label.get(noise_label, {})),
+        )
         story.extend(
             build_noise_section_block(
                 noise_label=noise_label,
                 grouped_noise_reports=noise_reports,
                 results_dir=results_dir,
                 styles=styles,
-                analysis_text=analysis_text,
+                analysis_text=noise_body,
+                takeaway_lines=noise_takeaways,
             )
         )
 
@@ -1731,18 +2017,20 @@ def build_report(
         "crash": locate_plot_file(results_dir, ["comparison/td3_vs_ddpg_crash.png"]),
         "laps": locate_plot_file(results_dir, ["comparison/td3_vs_ddpg_laps.png"]),
     }
-    for metric_key, metric_title, metric_label in [
+    comp_body, comp_takeaways = ensure_takeaways(comparison_analysis, build_comparison_takeaways(comparison_metrics))
+    for idx, (metric_key, metric_title, metric_label) in enumerate([
         ("reward", "TD3 vs DDPG Reward Comparison", "Reward vs Episodes"),
         ("crash", "TD3 vs DDPG Crash Rate Comparison", "Crash Rate vs Episodes"),
         ("laps", "TD3 vs DDPG Laps Comparison", "Laps vs Episodes"),
-    ]:
+    ]):
         story.extend(
             build_plot_story_block(
                 title=metric_title,
                 image_path=comparison_files[metric_key],
-                caption=f"{metric_label} across all experiments.",
+                caption=f"{metric_label} across all experiments with uncertainty represented as mean ± standard deviation.",
                 styles=styles,
-                analysis_lines=wrap_paragraphs(comparison_analysis, width=92),
+                analysis_lines=wrap_paragraphs(comp_body, width=92) if idx == 0 else None,
+                takeaway_lines=comp_takeaways if idx == 0 else None,
                 image_height=4.0 * inch,
             )
         )
@@ -1750,17 +2038,39 @@ def build_report(
     story.append(Paragraph("Key Aggregate Insights", styles["SectionHeading"]))
     story.append(
         Paragraph(
-            "The following section summarizes the cross-noise trends and identifies the best-performing reward function and overall algorithm trend.",
+            "The following section summarizes cross-noise trade-offs with explicit safety, stability, and sample-efficiency interpretation.",
             styles["ReportNote"],
         )
     )
-    story.append(Paragraph(xml_escape(insight_analysis), styles["AnalysisBody"]))
+    insight_body, insight_takeaways = ensure_takeaways(
+        insight_analysis,
+        [
+            "Noise increases variability and can worsen safety, so robustness must be checked alongside reward.",
+            "Convergence and crash-rate trends should guide algorithm choice by deployment priorities.",
+        ],
+    )
+    story.append(Paragraph(xml_escape(insight_body), styles["AnalysisBody"]))
+    story.append(Spacer(1, 0.04 * inch))
+    story.append(Paragraph("Key Takeaways", styles["SubSectionHeading"]))
+    for point in insight_takeaways[:3]:
+        story.append(Paragraph(f"- {xml_escape(point)}", styles["AnalysisBody"]))
     story.append(PageBreak())
 
     story.append(Paragraph("Final Conclusion", styles["SectionHeading"]))
-    conclusion_paragraphs = wrap_paragraphs(conclusion_analysis, width=94)
+    conclusion_body, conclusion_takeaways = ensure_takeaways(
+        conclusion_analysis,
+        [
+            "Prioritize TD3 when stability and safety are primary constraints.",
+            "Prioritize DDPG when maximizing reward is primary and crash-rate limits remain acceptable.",
+        ],
+    )
+    conclusion_paragraphs = wrap_paragraphs(conclusion_body, width=94)
     for paragraph in conclusion_paragraphs:
         story.append(Paragraph(xml_escape(paragraph), styles["AnalysisBody"]))
+    story.append(Spacer(1, 0.04 * inch))
+    story.append(Paragraph("Key Takeaways", styles["SubSectionHeading"]))
+    for point in conclusion_takeaways[:3]:
+        story.append(Paragraph(f"- {xml_escape(point)}", styles["AnalysisBody"]))
 
     doc = SimpleDocTemplate(
         str(output_file),
