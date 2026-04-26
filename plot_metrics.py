@@ -735,6 +735,201 @@ def _aggregate_mean(series_list: list[np.ndarray]) -> np.ndarray:
     return np.nanmean(stacked, axis=0)
 
 
+def _tail_mean(values: np.ndarray, window: int) -> float:
+    """Compute a robust mean over the final window of finite values."""
+    arr = np.asarray(values, dtype=float)
+    if arr.size == 0:
+        return float("nan")
+
+    tail = arr[-max(1, int(window)) :]
+    finite = tail[np.isfinite(tail)]
+    if finite.size == 0:
+        return float("nan")
+    return float(np.mean(finite))
+
+
+def _reward_level_from_label(experiment_label: str) -> str:
+    """Extract reward-system level (R1-R4) from labels like R2_N3."""
+    match = re.search(r"(R[1-4])", str(experiment_label).upper())
+    return match.group(1) if match else "R1"
+
+
+def _pareto_front_indices(rewards: np.ndarray, crashes: np.ndarray) -> set[int]:
+    """Return indices on the Pareto frontier (maximize reward, minimize crash)."""
+    frontier: set[int] = set()
+    for i in range(len(rewards)):
+        dominated = False
+        for j in range(len(rewards)):
+            if i == j:
+                continue
+            better_or_equal_reward = rewards[j] >= rewards[i]
+            better_or_equal_crash = crashes[j] <= crashes[i]
+            strictly_better = rewards[j] > rewards[i] or crashes[j] < crashes[i]
+            if better_or_equal_reward and better_or_equal_crash and strictly_better:
+                dominated = True
+                break
+        if not dominated:
+            frontier.add(i)
+    return frontier
+
+
+def _plot_tradeoff_scatter(
+    points: list[dict[str, float | str]],
+    output_path: str,
+):
+    """Plot reward-vs-crash trade-off points for TD3 and DDPG across experiments."""
+    if not points:
+        print("[plot][warn] No points available for trade-off visualization.")
+        return
+
+    plt.rcParams.update({"font.size": 12})
+    fig, ax = plt.subplots(figsize=(8, 6))
+
+    reward_markers = {
+        "R1": "o",  # circle
+        "R2": "^",  # triangle
+        "R3": "s",  # square
+        "R4": "D",  # diamond
+    }
+
+    all_rewards = np.asarray([float(p["reward"]) for p in points], dtype=float)
+    all_crashes = np.asarray([float(p["crash"]) for p in points], dtype=float)
+    frontier_idx = _pareto_front_indices(all_rewards, all_crashes)
+
+    # Label only a few representative extremes to reduce clutter.
+    key_indices: set[int] = set()
+    if all_rewards.size:
+        key_indices.add(int(np.nanargmax(all_rewards)))
+    if all_crashes.size:
+        key_indices.add(int(np.nanargmin(all_crashes)))
+
+    label_offsets = [
+        (6, 5),
+        (7, -7),
+        (-8, 6),
+        (-9, -8),
+        (10, 1),
+    ]
+
+    algorithm_handles = {}
+
+    for algo in ALGORITHMS:
+        algo_points = [p for p in points if p["algo"] == algo and np.isfinite(float(p["reward"])) and np.isfinite(float(p["crash"]))]
+        if not algo_points:
+            continue
+
+        algo_points = sorted(algo_points, key=lambda p: float(p["reward"]))
+        for p in algo_points:
+            reward = float(p["reward"])
+            crash = float(p["crash"])
+            reward_std = abs(float(p.get("reward_std", 0.0)))
+            crash_std = abs(float(p.get("crash_std", 0.0)))
+            exp_label = str(p["experiment_label"])
+            reward_level = _reward_level_from_label(exp_label)
+            marker = reward_markers.get(reward_level, "o")
+            global_idx = int(p.get("global_idx", -1))
+            is_frontier = global_idx in frontier_idx
+
+            eb = ax.errorbar(
+                x=reward,
+                y=crash,
+                xerr=reward_std,
+                yerr=crash_std,
+                fmt=marker,
+                markersize=8 if is_frontier else 7,
+                color=ALGO_COLORS[algo],
+                ecolor=ALGO_COLORS[algo],
+                elinewidth=1.0,
+                capsize=2,
+                capthick=1.0,
+                alpha=0.5,
+                markeredgecolor="black" if is_frontier else "white",
+                markeredgewidth=1.0 if is_frontier else 0.6,
+                zorder=4 if is_frontier else 3,
+            )
+
+            if algo not in algorithm_handles:
+                algorithm_handles[algo] = eb.lines[0]
+
+            if global_idx in key_indices:
+                offset = label_offsets[global_idx % len(label_offsets)]
+                ax.annotate(
+                    exp_label,
+                    (reward, crash),
+                    textcoords="offset points",
+                    xytext=offset,
+                    ha="left" if offset[0] >= 0 else "right",
+                    va="bottom" if offset[1] >= 0 else "top",
+                    fontsize=8,
+                    alpha=0.95,
+                )
+
+    ax.set_title("Performance-Safety Trade-off: Reward vs Crash Rate (TD3 vs DDPG)")
+    ax.set_xlabel("Average Reward (mean +/- std)", fontsize=FONT_SIZE)
+    ax.set_ylabel("Crash Rate (mean +/- std)", fontsize=FONT_SIZE)
+    ax.tick_params(axis="both", labelsize=FONT_SIZE)
+    ax.set_ylim(0.75, 1.02)
+    ax.invert_yaxis()
+    ax.margins(x=0.05)
+
+    # Better region after inversion is to the right (higher reward) and upward (lower crash).
+    x0, x1 = ax.get_xlim()
+    y0, y1 = ax.get_ylim()
+    x_span = x1 - x0
+    y_span = y1 - y0
+    guide_start = (x0 + 0.18 * x_span, y0 + 0.20 * y_span)
+    ax.annotate(
+        "Better Region (High Reward, Low Crash)",
+        xy=(guide_start[0] + 0.22 * x_span, guide_start[1] - 0.18 * y_span),
+        xytext=guide_start,
+        arrowprops={"arrowstyle": "->", "lw": 1.2, "color": "#444444"},
+        fontsize=9,
+        color="#333333",
+        ha="left",
+        va="center",
+    )
+
+    from matplotlib.lines import Line2D
+
+    algo_legend_handles = [
+        Line2D([0], [0], marker="o", color="none", markerfacecolor=ALGO_COLORS[algo], markeredgecolor="white", markersize=8, label=algo.upper())
+        for algo in ALGORITHMS
+        if algo in algorithm_handles
+    ]
+    marker_legend_handles = [
+        Line2D([0], [0], marker=marker, color="#444444", linestyle="None", markersize=7, label=reward)
+        for reward, marker in reward_markers.items()
+    ]
+
+    first_legend = ax.legend(
+        handles=algo_legend_handles,
+        title="Algorithm",
+        loc="upper left",
+        bbox_to_anchor=(1.01, 1.00),
+        frameon=True,
+        facecolor="white",
+        framealpha=0.95,
+        edgecolor="#d0d0d0",
+    )
+    ax.add_artist(first_legend)
+    ax.legend(
+        handles=marker_legend_handles,
+        title="Reward System",
+        loc="upper left",
+        bbox_to_anchor=(1.01, 0.56),
+        frameon=True,
+        facecolor="white",
+        framealpha=0.95,
+        edgecolor="#d0d0d0",
+    )
+
+    ax.grid(True, linestyle="--", alpha=0.3, zorder=1)
+    fig.tight_layout(rect=(0, 0, 0.80, 1))
+    fig.savefig(output_path, dpi=PLOT_DPI, bbox_inches="tight", pad_inches=0.08)
+    plt.close(fig)
+    print(f"[plot] Saved: {output_path}")
+
+
 def plot_algo_comparisons(base_log_dir: str, experiment_ids: list[str], output_dir: str, window: int, smooth: bool):
     """Generate per-experiment and aggregate TD3-vs-DDPG comparison plots."""
     apply_styling()
@@ -748,6 +943,8 @@ def plot_algo_comparisons(base_log_dir: str, experiment_ids: list[str], output_d
     ddpg_crash_all = []
     td3_laps_all = []
     ddpg_laps_all = []
+    tradeoff_points: list[dict[str, float | str]] = []
+    tradeoff_index = 0
 
     for exp_id in experiment_ids:
         td3_series = load_experiment_series(
@@ -773,6 +970,34 @@ def plot_algo_comparisons(base_log_dir: str, experiment_ids: list[str], output_d
         ddpg_crash_all.append(ddpg_series["crash_total"])
         td3_laps_all.append(td3_series["laps_total"])
         ddpg_laps_all.append(ddpg_series["laps_total"])
+
+        exp_label = format_experiment_label(exp_id)
+        tradeoff_points.append(
+            {
+                "algo": "td3",
+                "experiment": exp_id,
+                "experiment_label": exp_label,
+                "reward": _tail_mean(td3_series["reward_total"], window),
+                "crash": _tail_mean(td3_series["crash_total"], window),
+                "reward_std": _tail_mean(td3_series["reward_total_std"], window),
+                "crash_std": _tail_mean(td3_series["crash_total_std"], window),
+                "global_idx": tradeoff_index,
+            }
+        )
+        tradeoff_index += 1
+        tradeoff_points.append(
+            {
+                "algo": "ddpg",
+                "experiment": exp_id,
+                "experiment_label": exp_label,
+                "reward": _tail_mean(ddpg_series["reward_total"], window),
+                "crash": _tail_mean(ddpg_series["crash_total"], window),
+                "reward_std": _tail_mean(ddpg_series["reward_total_std"], window),
+                "crash_std": _tail_mean(ddpg_series["crash_total_std"], window),
+                "global_idx": tradeoff_index,
+            }
+        )
+        tradeoff_index += 1
 
         td3_plot = {
             **td3_series,
@@ -864,6 +1089,10 @@ def plot_algo_comparisons(base_log_dir: str, experiment_ids: list[str], output_d
         ylabel="Laps per Episode",
         title=_format_plot_title("Laps per Episode", "All Experiments"),
         output_path=os.path.join(output_dir, "td3_vs_ddpg_laps.png"),
+    )
+    _plot_tradeoff_scatter(
+        points=tradeoff_points,
+        output_path=os.path.join(output_dir, "td3_vs_ddpg_tradeoff_reward_vs_crash.png"),
     )
 
     print(f"[plot] Saved: {os.path.join(output_dir, 'td3_vs_ddpg_reward.png')}")
