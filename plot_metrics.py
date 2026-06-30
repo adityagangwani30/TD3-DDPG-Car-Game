@@ -1229,6 +1229,12 @@ def main():
             output_dir=args.grouped_output,
             rolling_window=window,
         )
+        plot_all_experiment_aggregates(
+            base_log_dir=args.log_dir,
+            experiment_ids=experiment_ids,
+            output_dir=os.path.join("results", "aggregate"),
+            window=window,
+        )
         print(f"[plot] Comparison mode complete for up to {len(experiment_ids)} experiments.")
         return
 
