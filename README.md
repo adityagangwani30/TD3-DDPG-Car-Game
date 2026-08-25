@@ -38,6 +38,7 @@ TD3-DDPG-Car-Game/
 ├── train.py                 # Core training loop with logging and metrics
 ├── run_experiments.py       # Batch runner for the full 12-experiment grid
 ├── eval_models.py           # Multi-model evaluation and comparison
+├── preflight_checks.py      # Automated 16-point pre-flight validation suite
 │
 ├── td3_agent.py             # TD3 implementation (twin critics, delayed policy)
 ├── ddpg_agent.py            # DDPG implementation (single critic baseline)
@@ -50,21 +51,21 @@ TD3-DDPG-Car-Game/
 ├── config.py                # Hyperparameters and experiment configurations
 ├── metrics_tracker.py       # Episode metrics logging (JSONL format)
 ├── plot_metrics.py          # Visualization utilities
+├── generate_td3_ddpg_report.py # Result aggregation and reporting engine
 ├── utils.py                 # Helper functions (seeds, assets, rendering)
 │
+├── EXPERIMENT_V2.md         # Authoritative camera-ready experiment protocol
 ├── colab_demo_td3.ipynb     # Notebook: TD3 experiments
 ├── colab_demo_ddpg.ipynb    # Notebook: DDPG experiments
 ├── colab_demo_both.ipynb    # Notebook: Full comparative suite
 │
-├── models/                  # Trained model checkpoints (algo/config/seed)
-├── logs/                    # Training logs (algo/config/seed/training_log.jsonl)
-├── results/
-│   ├── plots/               # Generated matplotlib figures
-│   │   ├── comparison/      # TD3 vs DDPG comparisons
-│   │   ├── td3/             # TD3 per-configuration analysis
-│   │   └── ddpg/            # DDPG per-configuration analysis
-│   ├── grouped/             # Grouped results by noise level
-│   └── aggregate/           # Aggregated metrics across seeds
+├── logs_v2/                 # Camera-Ready training & evaluation logs (algo/config/seed/)
+├── models_v2/               # Camera-Ready model checkpoints (algo/config/seed/)
+├── results_v2/              # Camera-Ready figures, tables, and reports
+│
+├── logs/                    # Historical baseline logs (preserved, read-only)
+├── models/                  # Historical baseline checkpoints (preserved, read-only)
+├── results/                 # Historical baseline plots and tables (preserved, read-only)
 │
 ├── assets/                  # Generated track and car sprites
 ├── requirements.txt         # Python dependencies
@@ -183,7 +184,7 @@ Each configuration is trained with 3 independent random seeds (0, 42, 123) as th
 | Learning rates (actor & critic) | 3 × 10⁻⁴ | Adam optimizer |
 | Discount factor (γ) | 0.99 | Standard RL discount factor |
 | Soft update rate (τ) | 0.005 | Target network Polyak averaging |
-| Exploration noise | 0.1 → 0.01 | Decaying at 0.9999/step |
+| Exploration noise | 0.1 initial | Per-episode geometric decay with factor 0.9999 and floor 0.01 |
 | Deterministic evaluation | 20 episodes | Performed on best checkpoint (noise OFF) |
 | Random seeds | 0, 42, 123 | Independent training replicates ($n=3$) |
 
@@ -245,6 +246,9 @@ Percentage of episodes in which the agent completes at least one full lap.
 ---
 
 ## 🎯 Key Insights & Trade-offs
+
+> [!NOTE]
+> **Historical baseline note:** The observations below summarize the original accepted-paper experiment conducted under the previous 300-step episode horizon. The corrected camera-ready protocol uses a 600-step horizon and will be re-evaluated in the Phase 2 72-run experimental suite. Final camera-ready conclusions will be based on the corrected experiment.
 
 This section summarizes patterns observed across the 24 configurations. **No single algorithm or configuration dominates all metrics.**
 
@@ -334,9 +338,6 @@ source venv/bin/activate
 pip install -r requirements.txt
 ```
 
-### Train a Single Agent
-
-```bash
 ### Pre-Flight Verification
 
 Before launching training runs, verify environment dynamics, replay buffer integrity, and configuration parameters:

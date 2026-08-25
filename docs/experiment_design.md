@@ -43,7 +43,7 @@ All experiments use the same hyperparameters (defined in `config.py`):
 | Critic learning rate | 3 × 10⁻⁴ | Adam optimizer |
 | Discount factor (γ) | 0.99 | Standard RL discount |
 | Soft update rate (τ) | 0.005 | Target network Polyak averaging |
-| Exploration noise | 0.1 initial, decaying at 0.9999/step | Gaussian noise with 0.01 floor |
+| Exploration noise | 0.1 initial, per-episode geometric decay with factor 0.9999 and floor 0.01 | Gaussian action perturbation with floor |
 | Deterministic evaluation | 20 episodes per model | Exploration noise strictly OFF |
 | Random seeds | 0, 42, 123 | 3 independent training replicates ($n=3$) |
 

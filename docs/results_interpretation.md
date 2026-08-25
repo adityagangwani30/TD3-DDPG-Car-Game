@@ -55,6 +55,9 @@ Agent A has higher reward but Agent B is clearly the better driver. This is why 
 
 ## Key Insights from Recent Results
 
+> [!NOTE]
+> **Historical baseline note:** The insights below describe empirical patterns observed in the original accepted-paper baseline dataset (`logs/`, 300-step horizon). Final conclusions for the camera-ready version will be established from the Phase 2 72-run experimental suite (`logs_v2/`, 600-step horizon).
+
 ### R3_N2 Performs Well
 
 In recent experimental runs, **R3 (modified reward) with N2 (moderate noise, σ=0.02)** has shown strong overall performance:

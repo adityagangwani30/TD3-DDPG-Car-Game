@@ -18,10 +18,10 @@ $$\text{2 Algorithms} \times \text{4 Reward Formulations} \times \text{3 Sensor-
    - `TD3` (Twin Delayed Deep Deterministic Policy Gradient)
    - `DDPG` (Deep Deterministic Policy Gradient)
 2. **Reward Configurations (4):**
-   - `R1` — `basic`: $R = +0.05 \cdot v - 5.0 \cdot \mathbb{I}_{\text{crash}} + 10.0 \cdot \mathbb{I}_{\text{lap}}$
-   - `R2` — `shaped`: $R = +0.10 \cdot v + 0.05 \cdot \mathbb{I}_{\text{alive}} - 0.02 \cdot |\delta| - 5.0 \cdot \mathbb{I}_{\text{crash}} + 10.0 \cdot \mathbb{I}_{\text{lap}}$
-   - `R3` — `modified`: $R = +0.20 \cdot v + 0.10 \cdot \mathbb{I}_{\text{alive}} - 0.05 \cdot |\delta| - 5.0 \cdot \mathbb{I}_{\text{crash}} + 10.0 \cdot \mathbb{I}_{\text{lap}}$
-   - `R4` — `tuned`: $R = +0.30 \cdot v + 0.15 \cdot \mathbb{I}_{\text{alive}} - 0.05 \cdot |\delta| - 5.0 \cdot \mathbb{I}_{\text{crash}} + 10.0 \cdot \mathbb{I}_{\text{lap}}$
+   - `R1` — `basic`: $R = +0.05 \cdot \mathbb{I}_{\text{alive}} - 5.0 \cdot \mathbb{I}_{\text{crash/stuck}}$ (baseline survival only, no speed or lap bonus)
+   - `R2` — `shaped`: $R = +0.05 \cdot \mathbb{I}_{\text{alive}} + 0.15 \cdot \mathbb{I}_{v > 0.15} + 15.0 \cdot \mathbb{I}_{\text{lap}} - 0.05 \cdot \delta^2 - 5.0 \cdot \mathbb{I}_{\text{crash/stuck}}$
+   - `R3` — `modified`: $R = +0.05 \cdot \mathbb{I}_{\text{alive}} + 0.18 \cdot \mathbb{I}_{v > 0.15} + 16.0 \cdot \mathbb{I}_{\text{lap}} - 0.04 \cdot \delta^2 + 0.06 \cdot \frac{v}{v_{\max}} + 0.03 \cdot \mathbb{I}_{v > 0.15 \land |\delta| < 0.2} - 0.02 \cdot \mathbb{I}_{v \le 0.15} - 5.0 \cdot \mathbb{I}_{\text{crash/stuck}}$
+   - `R4` — `tuned`: $R = +0.08 \cdot \mathbb{I}_{\text{alive}} + 0.25 \cdot \mathbb{I}_{v > 0.15} + 18.0 \cdot \mathbb{I}_{\text{lap}} - 0.03 \cdot \delta^2 + 0.10 \cdot \frac{v}{v_{\max}} + 0.05 \cdot \mathbb{I}_{v > 0.15 \land |\delta| < 0.2} - 0.04 \cdot \mathbb{I}_{v \le 0.15} - 5.0 \cdot \mathbb{I}_{\text{crash/stuck}}$
 3. **Observation Sensor-Noise Levels (3):**
    - `N1` — $\sigma_{\text{sensor}} = 0.00$ (Deterministic rangefinders)
    - `N2` — $\sigma_{\text{sensor}} = 0.02$ (Low Gaussian noise on 3 distance sensors)
@@ -40,7 +40,7 @@ $$\text{2 Algorithms} \times \text{4 Reward Formulations} \times \text{3 Sensor-
 | **Training Episodes per Run** | `2,000` | Full training curve per seed |
 | **Max Steps per Episode ($T_{\max}$)** | `600` | Increased from 300 to allow physically feasible lap completion (min required: 382 steps) |
 | **Exploration Noise ($\sigma_0$)** | `0.1` | Gaussian action perturbation |
-| **Exploration Noise Decay** | `0.9999` | Per-step geometric decay with $0.01$ floor |
+| **Exploration Noise Decay** | `0.9999` | Per-episode geometric decay with factor 0.9999 and floor 0.01 |
 | **Deterministic Evaluation Episodes** | `20` | Run immediately upon training completion using the best checkpoint |
 | **Evaluation Exploration Noise** | `OFF` (`add_noise=False`) | Strictly deterministic greedy policy |
 | **Total Evaluation Episodes** | `1,440` | $72\text{ models} \times 20\text{ episodes}$ |
