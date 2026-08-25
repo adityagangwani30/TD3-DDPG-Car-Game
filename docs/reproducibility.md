@@ -116,23 +116,67 @@ The following statement is suitable for inclusion in a README or research paper:
 
 ---
 
-## What Is Reproducible
+## Technical Code Corrections for Camera-Ready Reproducibility
 
-Despite the stochasticity, the following aspects of this project are fully reproducible:
+During the pre-camera-ready audit, four critical technical corrections were implemented to guarantee rigorous reproducibility:
+
+### 1. State Buffer Copying (`car.py`)
+- **Issue in Legacy Implementation:** `Car.get_state()` returned an internal NumPy buffer without an explicit array copy (`return self._state_buffer`). When the environment stepped, mutable in-place array updates caused transitions $(s_t, a_t, r_t, s_{t+1}, d_t)$ stored in the `ReplayBuffer` to share array pointers, corrupting historical state observations.
+- **Correction:** `Car.get_state()` now returns `self._state_buffer.copy()`, ensuring uncoupled state snapshots throughout training and replay sampling.
+
+### 2. Physical Lap Horizon Feasibility (`config.py`)
+- **Issue in Legacy Implementation:** The previous 300-step limit truncated episodes before a car starting from standstill could physically finish a full 2068.8-pixel centerline lap (which requires a theoretical minimum of 382 steps at full throttle).
+- **Correction:** The episode horizon was set to `MAX_STEPS_PER_EPISODE = 600`.
+
+### 3. Separation of Training vs. Deterministic Evaluation (`train.py`)
+- **Protocol:** Exploration noise ($\sigma = 0.1 \times 0.9999^{\text{step}}$) remains active during training. Following training, the best checkpoint is evaluated deterministically for **20 independent episodes** with `add_noise=False`.
+- Headline safety and performance metrics (Crash Rate, Lap Completion Rate, Track Distance) are derived exclusively from deterministic evaluation runs.
+
+### 4. Robust Completion & Resume Logic (`run_experiments.py`)
+- Resuming interrupted batches requires both 2,000 completed training episodes **AND** a valid 20-episode `evaluation_summary.json`. Missing evaluations are automatically executed on resume.
+
+---
+
+## 16-Point Pre-Flight Validation Suite
+
+To ensure no regressions, [`preflight_checks.py`](../preflight_checks.py) validates the entire pipeline prior to long runs:
+
+1. **State Object Identity:** `state is not next_state`
+2. **State Immutability:** Pre-step state array values are unaltered by `env.step()`
+3. **Replay Transition Integrity:** Transitions in `ReplayBuffer` maintain distinct pre/post arrays
+4. **State/Action Dimensionality:** State $\in \mathbb{R}^7$, Action $\in \mathbb{R}^2$
+5. **Throttle Mapping:** Environment clips $a_1 \in [0, 1]$ correctly
+6. **Steering Range:** Steering bounds remain within $[-1, 1]$
+7. **Lap Feasibility:** Centerline lap is physically navigable within 600 steps
+8. **Episode Termination:** Off-track crashes and max steps terminate cleanly
+9. **Sensor Noise Isolation:** Sensor noise is active only in observations, not underlying vehicle physics
+10. **Deterministic Evaluation:** Noise is strictly disabled during evaluation
+11. **Fresh Model Initialization:** Consecutive runs initialize independent network weights
+12. **Replay Buffer Isolation:** Buffers are instantiated freshly per seed
+13. **Seed Repeatability:** Identical seeds reproduce identical trajectories
+14. **72-Run Factorial Grid:** Exact enumeration of 72 unique $(algo, R_i, N_j, s_k)$ combinations
+15. **Resume Logic Rigor:** Detects complete vs incomplete logs accurately
+16. **Evaluation Serialization:** Verifies `evaluation_summary.json` schema and statistics
+
+---
+
+## What Is Reproducible
 
 | Aspect | How |
 |--------|-----|
-| Experiment grid | Defined in `config.py` as `EXPERIMENTS` |
-| Hyperparameters | All in `config.py`, identical across experiments |
-| Code | Version-controlled in Git |
-| Logs | JSONL format with all episode data |
-| Seeds | Fixed at 0, 42, 123 |
-| Environment | Deterministic physics (given same inputs and sensor noise seed) |
+| Experiment Grid | 72 runs ($2 \text{ algos} \times 4 \text{ rewards} \times 3 \text{ noises} \times 3 \text{ seeds}$) |
+| Canonical Codebase | Single shared implementation with configurable path arguments |
+| Isolated Output Directories | `logs_v2/`, `models_v2/`, `results_v2/` (legacy `logs/`, `models/` preserved) |
+| Hyperparameters | Configured in `config.py` and frozen in `EXPERIMENT_V2.md` |
+| Seeds | Fixed at 0, 42, 123 ($n=3$ independent training replicates) |
+| Environment | Deterministic physics given same control inputs and noise seed |
 
 ---
 
 ## Further Reading
 
-- [experiment_design.md](experiment_design.md) — How the experiments are structured
-- [results_interpretation.md](results_interpretation.md) — How to interpret results given stochasticity
-- **Implementation:** [`utils.py`](../utils.py) — `set_global_seed()`, [`config.py`](../config.py) — all hyperparameters
+- [EXPERIMENT_V2.md](../EXPERIMENT_V2.md) — Authoritative camera-ready protocol specification
+- [experiment_design.md](experiment_design.md) — Factorial study structure
+- [results_interpretation.md](results_interpretation.md) — Interpreting deterministic evaluation metrics
+- **Implementation:** [`utils.py`](../utils.py), [`preflight_checks.py`](../preflight_checks.py), [`config.py`](../config.py)
+

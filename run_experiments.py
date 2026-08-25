@@ -15,6 +15,7 @@ import pygame
 import torch
 
 from config import (
+    EVAL_EPISODES,
     EXPERIMENTS,
     EXPERIMENT_REWARD_MODES,
     EXPERIMENT_SENSOR_NOISE_LEVELS,
@@ -23,8 +24,10 @@ from config import (
     MAX_STEPS_PER_EPISODE,
     MODEL_DIR,
 )
+from ddpg_agent import DDPGAgent
 from environment import CarRacingEnv
-from train import train_with_config
+from td3_agent import TD3Agent
+from train import evaluate, train_with_config
 from utils import init_pygame, set_global_seed
 
 
@@ -118,19 +121,25 @@ def _is_experiment_complete(
     algo: str,
     max_episodes: int | None,
 ) -> bool:
-    """Return True when completion is confirmed by logs or best-model existence."""
-    if max_episodes is not None:
-        last_ep = _read_last_logged_episode(exp_log_dir)
-        if last_ep >= int(max_episodes):
-            return True
+    """Return True ONLY when both training (all episodes) and deterministic evaluation are complete."""
+    if max_episodes is None:
+        return False
 
-    best_model = Path(exp_model_dir) / f"{algo}_best.pth"
-    if best_model.exists():
-        return True
+    last_ep = _read_last_logged_episode(exp_log_dir)
+    if last_ep < int(max_episodes):
+        return False
 
-    wildcard_best = list(Path(exp_model_dir).glob(f"*_{algo}_best.pth"))
-    if wildcard_best:
-        return True
+    eval_summary_path = Path(exp_log_dir) / "evaluation_summary.json"
+    if not eval_summary_path.exists():
+        return False
+
+    try:
+        with open(eval_summary_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+            if data.get("num_episodes", 0) >= EVAL_EPISODES:
+                return True
+    except (OSError, json.JSONDecodeError):
+        return False
 
     return False
 
@@ -144,6 +153,8 @@ def run_all_experiments(
     start_index: int = 0,
     resume: bool = False,
     seed: int | None = None,
+    logs_base_dir: str = LOGS_DIR,
+    models_base_dir: str = MODEL_DIR,
 ):
     """Run all configured experiments sequentially with isolated outputs."""
     device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -173,6 +184,8 @@ def run_all_experiments(
         f"x {len(active_seeds)} seed(s) = {total_runs} total runs on device: {device}"
     )
     print(f"Seeds: {active_seeds}")
+    print(f"Logs base dir: {logs_base_dir}")
+    print(f"Models base dir: {models_base_dir}")
     print("=" * 72)
 
     completed_count = 0
@@ -194,8 +207,8 @@ def run_all_experiments(
 
         for current_seed in active_seeds:
             seed_tag = _seed_tag(current_seed)
-            exp_log_dir = os.path.join(LOGS_DIR, algo, tag, seed_tag)
-            exp_model_dir = os.path.join(MODEL_DIR, algo, tag, seed_tag)
+            exp_log_dir = os.path.join(logs_base_dir, algo, tag, seed_tag)
+            exp_model_dir = os.path.join(models_base_dir, algo, tag, seed_tag)
             os.makedirs(exp_log_dir, exist_ok=True)
             os.makedirs(exp_model_dir, exist_ok=True)
 
@@ -205,10 +218,54 @@ def run_all_experiments(
                 print(
                     f"[SKIP] [{algo.upper()}][Batch {batch_number}/{batch_total}] "
                     f"[{tag}][Seed {current_seed}] (Exp {index}/{len(scheduled_runs)}) "
-                    f"| logged episodes: {last_logged_episode}"
+                    f"| fully completed ({last_logged_episode} eps + eval)"
                 )
                 skipped_count += 1
                 continue
+
+            # If training already completed but deterministic evaluation is missing:
+            if resume and last_logged_episode >= max_episodes:
+                best_checkpoint = os.path.join(exp_model_dir, f"{algo}_best_avg100.pth")
+                if not os.path.exists(best_checkpoint):
+                    best_checkpoint = os.path.join(exp_model_dir, f"{algo}_best.pth")
+                if os.path.exists(best_checkpoint):
+                    print(
+                        f"[experiments] Training already complete for {tag} Seed {current_seed} ({last_logged_episode} eps). "
+                        "Running deterministic evaluation on best checkpoint..."
+                    )
+                    set_global_seed(current_seed)
+                    init_pygame(headless=headless)
+                    env = CarRacingEnv(
+                        enable_metrics=False,
+                        reward_mode=reward_mode,
+                        sensor_noise_std=sensor_noise_std,
+                        seed=current_seed,
+                        headless=headless,
+                    )
+                    agent = TD3Agent(device=device) if algo == "td3" else DDPGAgent(device=device)
+                    eval_meta = {
+                        "algo": algo,
+                        "experiment_name": experiment_id,
+                        "reward_mode": reward_mode,
+                        "sensor_noise_std": sensor_noise_std,
+                        "seed": current_seed,
+                        "checkpoint": best_checkpoint,
+                        "max_steps_per_episode": max_steps,
+                    }
+                    evaluate(
+                        env,
+                        agent,
+                        num_episodes=EVAL_EPISODES,
+                        render=False,
+                        checkpoint_path=best_checkpoint,
+                        eval_log_path=os.path.join(exp_log_dir, "evaluation_log.jsonl"),
+                        eval_summary_path=os.path.join(exp_log_dir, "evaluation_summary.json"),
+                        metadata=eval_meta,
+                    )
+                    env.close()
+                    pygame.quit()
+                    completed_count += 1
+                    continue
 
             checkpoint_path = _latest_checkpoint(exp_model_dir, algo) if resume else None
 
@@ -332,6 +389,18 @@ if __name__ == "__main__":
         action="store_true",
         help="Resume from the latest checkpoint and skip completed experiments",
     )
+    parser.add_argument(
+        "--logs-dir",
+        type=str,
+        default=LOGS_DIR,
+        help=f"Base directory for logs (default: {LOGS_DIR})",
+    )
+    parser.add_argument(
+        "--models-dir",
+        type=str,
+        default=MODEL_DIR,
+        help=f"Base directory for models (default: {MODEL_DIR})",
+    )
     cli_args = parser.parse_args()
     if cli_args.algo is None:
         raise ValueError("You must specify --algo {td3, ddpg}")
@@ -344,4 +413,6 @@ if __name__ == "__main__":
         start_index=cli_args.start_index,
         resume=cli_args.resume,
         seed=cli_args.seed,
+        logs_base_dir=cli_args.logs_dir,
+        models_base_dir=cli_args.models_dir,
     )

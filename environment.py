@@ -37,7 +37,7 @@ from config import (
 )
 from lap_timer import LapTimer
 from metrics_tracker import MetricsTracker
-from utils import draw_text, ensure_assets_exist, load_track_mask
+from utils import draw_text, ensure_assets_exist, init_pygame, load_track_mask
 
 
 class CarRacingEnv:
@@ -53,6 +53,11 @@ class CarRacingEnv:
         seed: int | None = None,
         headless: bool = False,
     ):
+        if not pygame.get_init():
+            init_pygame(headless=headless)
+        if not pygame.font.get_init():
+            pygame.font.init()
+
         ensure_assets_exist()
 
         self.headless = headless
@@ -109,6 +114,7 @@ class CarRacingEnv:
         self.step_count = 0
         self.episode_reward = 0.0
         self.stuck_steps = 0
+        self.distance_traveled = 0.0
 
     def reset(self) -> np.ndarray:
         """Reset the environment and return the initial observation."""
@@ -118,6 +124,7 @@ class CarRacingEnv:
         self.step_count = 0
         self.episode_reward = 0.0
         self.stuck_steps = 0
+        self.distance_traveled = 0.0
         self.episode += 1
 
         self.lap_timer.reset()
@@ -134,6 +141,7 @@ class CarRacingEnv:
         self.car.update(steering, throttle)
         self.car.cast_sensors()
         self.step_count += 1
+        self.distance_traveled += float(self.car.speed)
 
         # Check for lap completion
         lap_completed = self.lap_timer.update(
@@ -154,6 +162,11 @@ class CarRacingEnv:
         info = {
             "termination_reason": termination_reason,
             "lap_completed": lap_completed,
+            "distance_traveled": float(self.distance_traveled),
+            "speed": float(self.car.speed),
+            "laps_completed": int(self.lap_timer.laps_completed),
+            "last_lap_time": self.lap_timer.last_lap_time,
+            "best_lap_time": self.lap_timer.best_lap_time,
         }
 
         # Log metrics if tracking enabled
@@ -385,5 +398,5 @@ class CarRacingEnv:
             draw_text(self.screen, line, hud_x, hud_y + index * line_h, self.font, HUD_TEXT_COLOR)
 
     def close(self):
-        """Shut down Pygame."""
-        pygame.quit()
+        """Shut down environment resources."""
+        pass

@@ -1,6 +1,18 @@
 # Training and Evaluation
 
-This document explains how to train, evaluate, and run experiments using the actual commands available in this project.
+This document explains how to train, evaluate, and run experiments using the canonical shared scripts available in this repository.
+
+---
+
+## Pre-Flight Verification
+
+Before running long training experiments, verify environment dynamics, replay transition integrity, and configuration validity:
+
+```bash
+python preflight_checks.py
+```
+
+All 16 sanity checks must pass.
 
 ---
 
@@ -8,11 +20,12 @@ This document explains how to train, evaluate, and run experiments using the act
 
 | Run Type | Script | Purpose |
 |----------|--------|---------|
+| Pre-Flight Sanity | `preflight_checks.py` | 16-point automated verification suite |
 | Single training run | `main.py` | Train one agent with default settings |
-| Batch experiment run | `run_experiments.py` | Run all 12 configurations for one algorithm |
-| Evaluation/demo run | `main.py` | Evaluate a trained agent or run a demo |
-| Plot generation | `plot_metrics.py` | Generate plots from existing logs |
-| Model comparison | `eval_models.py` | Compare multiple saved checkpoints |
+| Batch experiment run | `run_experiments.py` | Run all 12 configurations for one algorithm across 3 seeds |
+| Evaluation/demo run | `main.py` / `eval_models.py` | Evaluate a trained checkpoint (deterministic, 20 eps) |
+| Plot generation | `plot_metrics.py` | Generate publication-grade plots (PNG + PDF) |
+| Research Report & Tables | `generate_td3_ddpg_report.py` | Aggregate metrics across seeds and export CSV tables & PDF report |
 
 ---
 
@@ -21,20 +34,20 @@ This document explains how to train, evaluate, and run experiments using the act
 Train a single agent with default settings:
 
 ```bash
-# Train TD3 (2,000 episodes, with GUI rendering)
+# Train TD3 (2,000 episodes, 600 max steps, with GUI rendering)
 python main.py --algo td3 --mode train
 
 # Train DDPG in headless mode (faster, no display)
 python main.py --algo ddpg --mode train --headless
 
 # Custom episode and step counts
-python main.py --algo td3 --mode train --max-episodes 1000 --max-steps 300 --headless
+python main.py --algo td3 --mode train --max-episodes 2000 --max-steps 600 --headless
 
 # Resume training from latest checkpoint
 python main.py --algo td3 --mode train --resume
 
 # Resume from a specific checkpoint
-python main.py --algo td3 --mode train --checkpoint models/td3/td3_ep500.pth
+python main.py --algo td3 --mode train --checkpoint models_v2/td3/td3_ep500.pth
 ```
 
 A single training run uses the default reward mode (`shaped` / R2) and the default sensor noise from `config.py`. It trains from scratch unless `--resume` or `--checkpoint` is specified.
@@ -43,10 +56,10 @@ A single training run uses the default reward mode (`shaped` / R2) and the defau
 
 ## Batch Experiment Run
 
-Run all 12 configurations (4 reward × 3 noise) for one algorithm:
+Run all 12 configurations (4 reward × 3 noise) across 3 seeds for one algorithm:
 
 ```bash
-# Run all TD3 experiments
+# Run all TD3 experiments (writes to logs_v2/ and models_v2/ by default)
 python run_experiments.py --algo td3 --headless
 
 # Run all DDPG experiments
@@ -55,24 +68,19 @@ python run_experiments.py --algo ddpg --headless
 # Run a specific seed only
 python run_experiments.py --algo td3 --seed 42 --headless
 
-# Resume interrupted experiments (skips completed runs)
+# Resume interrupted experiments (skips runs where 2000 eps AND evaluation are complete)
 python run_experiments.py --algo td3 --resume --headless
 
-# Run only the first N experiments (useful for testing)
-python run_experiments.py --algo td3 --max-experiments 3 --headless
-
-# Start from a specific experiment index (for batching)
-python run_experiments.py --algo td3 --start-index 6 --headless
-
-# Custom episode count
-python run_experiments.py --algo td3 --max-episodes 500 --headless
+# Explicitly specify custom log and model directories
+python run_experiments.py --algo td3 --logs-dir logs_v2 --models-dir models_v2 --headless
 ```
 
 The batch runner:
 - Iterates through all 12 experiments defined in `config.EXPERIMENTS`
 - For each experiment, trains with seeds [0, 42, 123] (unless `--seed` overrides)
-- Creates isolated output directories per (algo, experiment, seed)
-- With `--resume`, skips experiments where logs already show completion
+- Automatically triggers a **20-episode deterministic evaluation** (`add_noise=False`) on the best checkpoint upon completing 2,000 episodes
+- Creates isolated output directories per `(algo, experiment, seed)`
+- With `--resume`, skips experiments only when both 2,000 episodes and evaluation summary are complete
 
 ---
 
@@ -81,14 +89,11 @@ The batch runner:
 Evaluate a trained model without exploration noise:
 
 ```bash
-# Evaluate TD3 with best checkpoint (10 episodes)
-python main.py --algo td3 --mode eval --render
+# Evaluate TD3 with best checkpoint (20 deterministic episodes)
+python main.py --algo td3 --mode eval --eval-episodes 20 --render
 
 # Evaluate with a specific checkpoint
-python main.py --algo td3 --mode eval --checkpoint models/td3/td3_best.pth --render
-
-# Custom number of evaluation episodes
-python main.py --algo td3 --mode eval --eval-episodes 20 --render
+python main.py --algo td3 --mode eval --checkpoint models_v2/td3/td3_best.pth --render
 
 # Run interactive demo (2 episodes, always rendered)
 python main.py --algo td3 --mode demo
@@ -96,68 +101,77 @@ python main.py --algo td3 --mode demo
 
 Evaluation mode:
 - Loads the best available checkpoint (or a specified one)
-- Runs deterministic actions (no exploration noise)
-- Reports average reward, crash rate, and lap completion
+- Runs deterministic actions (`agent.select_action(state, add_noise=False)`)
+- Emits `evaluation_log.jsonl` and `evaluation_summary.json`
+- Reports average reward, crash rate, lap completion rate, distance traveled, and lap times
 
 ### Multi-Model Comparison
 
 ```bash
 # Evaluate a specific model file
-python eval_models.py --model td3_best.pth --episodes 10
+python eval_models.py --model td3_best.pth --episodes 20
 
-# Use pattern matching to evaluate multiple models
-python eval_models.py --model "td3_ep*.pth" --episodes 5
-
-# Headless evaluation
-python eval_models.py --headless --episodes 10
+# Evaluate across a models directory
+python eval_models.py --models-dir models_v2 --episodes 20 --headless
 ```
 
 ---
 
-## Plot Generation
+## Result Aggregation and Plot Generation
 
-Generate plots from existing training logs:
+### 1. Research Report and CSV Table Aggregation
 
 ```bash
-# Generate individual plots for one algorithm
-python plot_metrics.py --algo td3
+# Generate comprehensive CSV tables and PDF research report for Camera-Ready V2
+python generate_td3_ddpg_report.py --logs-dir logs_v2 --results-dir results_v2 --strict
 
-# Generate TD3 vs DDPG comparison plots + grouped noise-level plots
-python plot_metrics.py --compare-algos
-
-# Custom smoothing window
-python plot_metrics.py --algo td3 --window 50
-
-# Specific experiments only
-python plot_metrics.py --algo td3 --experiments R1_N1 R2_N1 R3_N1
-
-# Custom output directories
-python plot_metrics.py --compare-algos --comparison-output results/custom_plots
+# Run on legacy logs for historical analysis
+python generate_td3_ddpg_report.py --logs-dir logs --results-dir results
 ```
 
-Plot generation reads from `logs/` and writes to `results/`:
+Outputs generated in `results_v2/tables/`:
+- `condition_results.csv`: Per-seed metrics (72 rows)
+- `condition_aggregate.csv`: Aggregated across seeds with Mean, SD, SEM, and 95% CI (24 rows)
+- `td3_vs_ddpg_comparisons.csv`: Direct pairwise head-to-head differences within condition (12 rows)
+- `noise_degradation.csv`: Performance degradation across sensor noise levels
+- `reward_tradeoff.csv`: Reward shaping aggressiveness sweep
+- `training_curves.csv`: Complete episodic training trajectory records
 
-| Output | Directory |
-|--------|-----------|
-| Individual per-experiment plots | `results/plots/{algo}/individual/{experiment}/` |
-| TD3 vs DDPG comparisons | `results/plots/comparison/` |
-| Grouped by noise level | `results/grouped/` |
+### 2. Publication Figures
+
+```bash
+# Generate all publication-quality comparison plots (PNG + PDF)
+python plot_metrics.py --logs-dir logs_v2 --results-dir results_v2 --compare-algos
+```
+
+Plots are saved under `results_v2/plots/` in high-resolution PNG (300 DPI) and vector PDF formats.
 
 ---
 
-## Where Outputs Are Saved
-
-### Logs
+## Directory Hierarchy
 
 ```
-logs/{algo}/{experiment_tag}/seed_{seed}/training_log.jsonl
+logs_v2/
+└── {algo}/                  # td3 or ddpg
+    └── {experiment_tag}/    # e.g., R1_N1, R2_N2
+        └── seed_{seed}/     # seed_0, seed_42, seed_123
+            ├── metadata.json
+            ├── training_log.jsonl
+            ├── evaluation_log.jsonl
+            └── evaluation_summary.json
+
+models_v2/
+└── {algo}/
+    └── {experiment_tag}_seed_{seed}_best.pth
+
+results_v2/
+├── aggregated/              # JSON aggregates
+├── per_seed/                # Individual seed JSON summaries
+├── tables/                  # Formatted CSV tables
+└── plots/                   # Publication figures (PNG + PDF)
 ```
 
-Example: `logs/td3/R1_N1/seed_0/training_log.jsonl`
-
-Each JSONL file contains one JSON object per episode with reward, crash, lap, speed, and noise data.
-
-### Models
+*(Legacy data in `logs/`, `models/`, and `results/` remains preserved and read-only).*
 
 ```
 models/{algo}/{experiment_tag}/seed_{seed}/{algo}_best.pth

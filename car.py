@@ -163,7 +163,7 @@ class Car:
         self.sensor_noise_std = max(0.0, float(sensor_noise_std))
 
     def get_state(self) -> np.ndarray:
-        """Return the observation vector using pre-allocated buffer."""
+        """Return the observation vector as an independent array copy."""
         buf = self._state_buffer
         buf[0] = self.x * self._INV_SCREEN_WIDTH
         buf[1] = self.y * self._INV_SCREEN_HEIGHT
@@ -172,7 +172,7 @@ class Car:
         # Copy sensor distances into buffer
         for i, d in enumerate(self.sensor_dists):
             buf[4 + i] = d
-        return buf
+        return buf.copy()
 
     def is_off_track(self) -> bool:
         """Return True if the car centre leaves the road."""

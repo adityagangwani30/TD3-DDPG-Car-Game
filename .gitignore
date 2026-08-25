@@ -77,5 +77,5 @@ htmlcov/
 .pytest_cache/
 
 .env
+.tokencap
 
-documentation

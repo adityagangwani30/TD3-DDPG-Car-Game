@@ -109,7 +109,7 @@ If the car's speed stays below `STUCK_SPEED_THRESHOLD` (0.15) for `STUCK_STEP_LI
 
 ### 3. Max Steps
 
-Each episode has a maximum of `MAX_STEPS_PER_EPISODE` (300) steps. If the agent survives to the end without crashing or getting stuck, the episode simply ends — this is handled by the training loop in `train.py`, not by the environment itself.
+Each episode has a maximum of `MAX_STEPS_PER_EPISODE` (600) steps. If the agent survives to the end without crashing or getting stuck, the episode simply ends — this is handled by the training loop in `train.py`, not by the environment itself. (The 600-step horizon provides ample headroom over the theoretical minimum of 382 steps needed to complete a full 2068.8-pixel centerline lap at full acceleration).
 
 ---
 

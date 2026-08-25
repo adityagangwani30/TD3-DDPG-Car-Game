@@ -75,24 +75,22 @@ pip install -r requirements.txt
 
 **Suggested fix:**
 
-1. Verify logs exist:
+1. Verify logs exist in the target logs directory:
    ```bash
-   # Check if log files are present
-   ls logs/td3/R1_N1/seed_0/training_log.jsonl    # Linux/Mac
-   dir logs\td3\R1_N1\seed_0\training_log.jsonl    # Windows
+   # Check if log files are present in logs_v2 (or legacy logs)
+   dir logs_v2\td3\R1_N1\seed_0\training_log.jsonl    # Windows
+   ls logs_v2/td3/R1_N1/seed_0/training_log.jsonl    # Linux/Mac
    ```
 
-2. Run the plot command with the correct algorithm:
+2. Run the plot command with the configured logs and results directories:
    ```bash
-   python plot_metrics.py --algo td3
+   python plot_metrics.py --logs-dir logs_v2 --results-dir results_v2 --compare-algos
    ```
 
-3. For comparison plots, both TD3 and DDPG logs must exist:
+3. Run the automated pre-flight sanity check to verify your environment setup:
    ```bash
-   python plot_metrics.py --compare-algos
+   python preflight_checks.py
    ```
-
-4. Check the output directory — plots are saved to `results/plots/` by default.
 
 ---
 

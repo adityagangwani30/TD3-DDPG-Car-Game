@@ -20,18 +20,18 @@ The rolling reward is the average total episode reward over the last 100 episode
 - R1 rewards survival only — a slow, cautious agent can score high
 - R4 has higher reward magnitudes by design — R4 rewards are not directly comparable to R1 rewards
 
-### Crash Rate
+### 2. Crash Rate
 
-The percentage of episodes in which the agent goes off-track. This is a **safety metric**.
+The percentage of episodes in which the agent goes off-track. This is a primary **safety metric** evaluated deterministically without exploration noise.
 
 **How to interpret:**
 - **Decreasing crash rate** → the agent is learning to stay on track
 - **Persistently high crash rate** (>50%) → the reward signal is insufficient or the noise is too high
-- **Very low crash rate** → could indicate cautious driving (check lap completion to confirm)
+- **Very low crash rate** → could indicate cautious driving (check lap completion and distance to confirm)
 
-### Lap Completion Rate
+### 3. Lap Completion Rate
 
-The percentage of episodes in which the agent completes at least one full lap. This is a **task success metric**.
+The percentage of evaluation episodes in which the agent completes at least one full lap. This is a primary **task success metric**.
 
 **How to interpret:**
 - **Increasing lap rate** → the agent is learning to complete the racing task
@@ -46,10 +46,10 @@ Consider two hypothetical agents with R1 (basic) reward:
 
 | Agent | Total Reward | Crashes | Laps | What Happened |
 |-------|-------------|---------|------|---------------|
-| Agent A | +15.0 | 0 | 0 | Sat still for 300 steps collecting +0.05/step |
+| Agent A | +30.0 | 0 | 0 | Sat still for 600 steps collecting +0.05/step |
 | Agent B | +8.0 | 1 | 2 | Drove fast, completed 2 laps, then crashed |
 
-Agent A has higher reward but Agent B is clearly the better driver. This is why **multiple metrics must be examined together**.
+Agent A has higher reward but Agent B is clearly the better driver. This is why **physical, scale-independent evaluation metrics (crash rate, lap completion, distance traveled) must be examined alongside reward**.
 
 ---
 

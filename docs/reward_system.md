@@ -125,21 +125,25 @@ When reward magnitudes are too large, the gradient signal becomes dominated by a
 
 ---
 
-## Why Reward Alone Is Insufficient
+## Why Reward Alone Is Insufficient (and Cross-Reward Averaging Is Invalid)
 
-This project demonstrates a critical insight: **high reward does not imply safe or effective driving.** To properly evaluate agent performance, you must examine multiple metrics together:
+This project demonstrates a critical methodological requirement: **raw reward values must NEVER be averaged across different reward configurations (R1–R4).**
 
-| Metric | What It Reveals |
-|--------|-----------------|
-| Reward | How well the agent optimizes the given incentive function |
-| Crash rate | How often the agent leaves the track (safety) |
-| Lap completion rate | Whether the agent actually completes the racing task |
-| Reward variance | How stable the agent's behavior is across episodes |
+Because R1 through R4 define different reward scales (e.g. alive bonus scaling, velocity scaling, and lap completion bonuses of 0 vs 15 vs 18), an average across reward functions is mathematically and scientifically meaningless.
 
-A complete evaluation requires all four. For example:
-- High reward + high crash rate → aggressive driving, unsafe
-- High reward + zero laps → reward hacking (sitting still)
-- Moderate reward + low crash rate + high lap rate → effective, safe driving
+To properly evaluate and compare agent performance:
+1. **Compare algorithms (TD3 vs DDPG) strictly within the exact same reward formulation.**
+2. **Examine physical, scale-independent metrics across reward configurations:**
+
+| Metric | Type | What It Reveals |
+|--------|:---:|-----------------|
+| Crash Rate | Physical / Safety | Fraction of episodes terminating in off-track collision |
+| Lap Completion Rate | Task Success | Fraction of episodes completing $\ge 1$ full centerline lap |
+| Track Distance | Progress | Total Euclidean distance traversed (centerline lap = 2069 px) |
+| Survival Length | Reliability | Steps survived per episode (up to 600) |
+| Episodic Reward | Scale-Dependent | How well the agent optimizes that specific objective function |
+
+Examining these metrics together reveals the **Reward Aggressiveness vs. Safety Trade-Off**: whether higher reward shaping intensity pushes the agent toward higher speed at the cost of elevated crash risk and reduced overall lap completion.
 
 ---
 

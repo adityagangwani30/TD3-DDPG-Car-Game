@@ -14,8 +14,11 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 ASSETS_DIR = os.path.join(BASE_DIR, "assets")
 TRACK_IMAGE_PATH = os.path.join(ASSETS_DIR, "track.png")
 CAR_IMAGE_PATH = os.path.join(ASSETS_DIR, "car.png")
-MODEL_DIR = os.path.join(BASE_DIR, "models")
-LOGS_DIR = os.path.join(BASE_DIR, "logs")
+MODEL_DIR = os.path.join(BASE_DIR, "models_v2")
+LOGS_DIR = os.path.join(BASE_DIR, "logs_v2")
+LEGACY_MODEL_DIR = os.path.join(BASE_DIR, "models")
+LEGACY_LOGS_DIR = os.path.join(BASE_DIR, "logs")
+
 
 # ---------------------------------------------------------------------------
 # Display / Pygame
@@ -149,7 +152,9 @@ BATCH_SIZE = 256
 DEFAULT_SEED = 42
 EXPERIMENT_BASE_SEED = 1000
 MAX_EPISODES = 2000
-MAX_STEPS_PER_EPISODE = 300
+MAX_STEPS_PER_EPISODE = 600
 TRAINING_START = 5000
 SAVE_MODEL_EVERY = 100
 RENDER_EVERY_EPISODES = 25
+EVAL_EPISODES = 20
+

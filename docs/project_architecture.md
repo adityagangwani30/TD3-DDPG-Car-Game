@@ -13,16 +13,16 @@ Environment (car.py + environment.py)
   TD3/DDPG Agent (td3_agent.py / ddpg_agent.py)
         │
         ▼
-  Training Loop (train.py)
+  Training & Eval Loop (train.py)
         │
         ▼
-  Experiment Runner (run_experiments.py)  ──►  Logs (logs/)
+  Experiment Runner (run_experiments.py)  ──►  Logs (logs_v2/)
         │                                       │
         ▼                                       ▼
-  Models (models/)                     Plot Generator (plot_metrics.py)
+  Models (models_v2/)                  Report & Plot Engines (generate_td3_ddpg_report.py & plot_metrics.py)
                                                 │
                                                 ▼
-                                        Results (results/plots/)
+                                        Results (results_v2/)
                                                 │
                                                 ▼
                                         Research Paper / Report
@@ -30,134 +30,84 @@ Environment (car.py + environment.py)
 
 ---
 
-## Main Files and Their Roles
+## Canonical Codebase Architecture
 
-### Entry Points
+The repository maintains a **single canonical implementation** for training, evaluation, metrics tracking, aggregation, and plotting. The same scripts operate on both legacy and camera-ready datasets via path parameters:
+
+- **Camera-Ready V2 (Default):** `--logs-dir logs_v2 --models-dir models_v2 --results-dir results_v2`
+- **Legacy Accepted Paper (Historical):** `--logs-dir logs --models-dir models --results-dir results`
+
+### Core Scripts
 
 | File | Role |
 |------|------|
-| `main.py` | Single-agent training, evaluation, and demo mode. Accepts `--algo {td3,ddpg}`, `--mode {train,eval,demo}`, and other CLI flags. |
-| `run_experiments.py` | Batch runner for the full 4×3 experiment grid. Runs all 12 configurations sequentially for one algorithm with multiple seeds (0, 42, 123). |
-| `eval_models.py` | Multi-model evaluation and comparison. Loads saved checkpoints and runs evaluation episodes. |
-| `plot_metrics.py` | Generates publication-quality plots from training logs. Supports individual, comparison, and grouped visualizations. |
+| `preflight_checks.py` | Standalone 16-point sanity suite validating state independence, physics feasibility, and matrix enumeration before long training runs. |
+| `main.py` | Single-agent training, evaluation, and demo mode. Accepts `--algo {td3,ddpg}`, `--mode {train,eval,demo}`, and CLI flags. |
+| `run_experiments.py` | Canonical batch runner for the 72-run factorial grid ($2 \text{ algos} \times 4 \text{ rewards} \times 3 \text{ noises} \times 3 \text{ seeds}$). Triggers 20-episode deterministic evaluation upon run completion. |
+| `eval_models.py` | Multi-model evaluation and comparison. Loads checkpoints, auto-detects conditions, and executes deterministic evaluation episodes. |
+| `plot_metrics.py` | Publication-quality plotting engine. Exports high-resolution (300 DPI PNG) and vector PDF figures across training dynamics, performance, and noise degradation. |
+| `generate_td3_ddpg_report.py` | Master research report and table generator. Aggregates seed data into CSV tables (`condition_results.csv`, `condition_aggregate.csv`, `td3_vs_ddpg_comparisons.csv`) and compiles the comprehensive research PDF. |
 
 ### Agent Implementations
 
 | File | Role |
 |------|------|
-| `td3_agent.py` | TD3 agent: Actor, twin Critic, target networks, delayed updates, target smoothing. |
-| `ddpg_agent.py` | DDPG agent: Actor, single Critic, target networks. Same API as TD3 for interchangeability. |
-| `replay_buffer.py` | Circular experience replay buffer backed by pre-allocated NumPy arrays. Shared by both algorithms. |
+| `td3_agent.py` | TD3 agent: Actor, twin Critic, target networks, delayed policy updates, target action smoothing. |
+| `ddpg_agent.py` | DDPG agent: Actor, single Critic, target networks. Shared API with TD3. |
+| `replay_buffer.py` | Experience replay buffer backed by pre-allocated NumPy arrays. |
 
 ### Environment
 
 | File | Role |
 |------|------|
-| `environment.py` | Gym-style `CarRacingEnv` class. Handles reset, step, reward computation (R1–R4), rendering, and metrics integration. |
-| `car.py` | Car physics (bicycle model), raycasting sensors, state vector construction, collision detection. |
-| `lap_timer.py` | Finish-line crossing detection and lap timing logic. |
+| `environment.py` | Gym-style `CarRacingEnv` class. Handles step transitions, reward modes (R1–R4), off-track detection, and Pygame lifecycle. |
+| `car.py` | Vehicle dynamics (bicycle model), raycast sensor casting, state array generation (with independent `.copy()` arrays), collision handling. |
+| `lap_timer.py` | Finish-line crossing geometry and lap timer. |
 
 ### Infrastructure
 
 | File | Role |
 |------|------|
-| `config.py` | Central configuration — all hyperparameters, screen dimensions, physics constants, experiment grid, file paths. |
-| `metrics_tracker.py` | Episode-level metrics logging to JSONL format. Tracks reward, speed, crashes, laps, and network stats. |
-| `utils.py` | Helpers: seed setting, headless detection, Pygame initialization, asset generation, track mask loading. |
-
-### Notebooks
-
-| File | Role |
-|------|------|
-| `colab_demo_td3.ipynb` | Google Colab notebook for TD3 experiments. |
-| `colab_demo_ddpg.ipynb` | Google Colab notebook for DDPG experiments. |
-| `colab_demo_both.ipynb` | Google Colab notebook for the full comparative suite (both algorithms). |
+| `config.py` | Central configuration — hyperparameters, physics constants, 72-run grid, default paths (`logs_v2`, `models_v2`, `results_v2`). |
+| `metrics_tracker.py` | Episode-level metrics logging to JSONL format. |
+| `utils.py` | Helpers: global seed setting, headless display detection, Pygame initialization, track mask loading. |
 
 ---
 
-## How Training Starts
+## Directory Hierarchy
 
-### Single Training Run (`main.py`)
-
-```bash
-python main.py --algo td3 --mode train --headless
 ```
-
-1. `main.py` parses CLI arguments
-2. Detects headless environment (auto or `--headless` flag)
-3. Initializes Pygame and sets random seed
-4. Creates `CarRacingEnv` with default reward mode (`shaped`) and noise
-5. Creates a TD3 or DDPG agent
-6. Optionally loads a checkpoint (`--resume` or `--checkpoint`)
-7. Calls `train()` from `train.py`
-8. Training loop runs for up to 2,000 episodes (configurable via `--max-episodes`)
-
-### Batch Experiment Run (`run_experiments.py`)
-
-```bash
-python run_experiments.py --algo td3 --headless
-```
-
-1. Iterates through all 12 experiments from `config.EXPERIMENTS` (4 reward × 3 noise)
-2. For each experiment, iterates through seeds [0, 42, 123]
-3. Creates isolated log and model directories per (algo, experiment, seed)
-4. Calls `train_with_config()` with the experiment-specific parameters
-5. Skips completed experiments when `--resume` is used
-
----
-
-## How Logs Are Generated
-
-The `MetricsTracker` class (`metrics_tracker.py`) writes one JSON line per episode to a `training_log.jsonl` file.
-
-Each log entry contains:
-- `experiment_name`, `reward_mode`, `sensor_noise_std`, `seed`
-- `episode`, `reward_total`, `reward_mean`, `reward_std`
-- `length`, `speed_mean`, `speed_max`, `steering_smooth`
-- `laps_completed`, `collisions`, `termination_reason`
-- `reward_rolling_avg_100`, `exploration_noise`, `replay_buffer_size`
-
-Log directory structure:
-```
-logs/
+logs_v2/
 ├── td3/
 │   ├── R1_N1/
-│   │   ├── seed_0/training_log.jsonl
-│   │   ├── seed_42/training_log.jsonl
-│   │   └── seed_123/training_log.jsonl
-│   ├── R1_N2/
-│   │   └── ...
-│   └── R4_N3/
-│       └── ...
+│   │   ├── seed_0/
+│   │   │   ├── metadata.json
+│   │   │   ├── training_log.jsonl
+│   │   │   ├── evaluation_log.jsonl
+│   │   │   └── evaluation_summary.json
+│   │   ├── seed_42/
+│   │   └── seed_123/
+│   └── ...
 └── ddpg/
     └── ...
+
+models_v2/
+├── td3/
+└── ddpg/
+
+results_v2/
+├── aggregated/
+├── per_seed/
+├── tables/
+└── plots/
+    ├── training/
+    ├── performance/
+    ├── td3_vs_ddpg/
+    ├── noise/
+    └── reward_tradeoff/
 ```
 
----
-
-## How Plots Are Generated
-
-```bash
-# Individual algorithm plots
-python plot_metrics.py --algo td3
-
-# TD3 vs DDPG comparison + grouped noise-level plots
-python plot_metrics.py --compare-algos
-```
-
-`plot_metrics.py` reads JSONL logs, computes rolling averages, aggregates across seeds (mean ± std), and generates:
-
-- **Individual plots** → `results/plots/{algo}/individual/{experiment_id}/`
-- **Comparison plots** → `results/plots/comparison/`
-- **Grouped plots** → `results/grouped/`
-
----
-
-## How Models Are Saved
-
-During training, models are saved to the `models/` directory:
-
-- `{algo}_best.pth` — best single-episode reward
+*(Legacy data in `logs/`, `models/`, and `results/` is preserved untouched for historical reference).*
 - `{algo}_best_avg100.pth` — best 100-episode rolling average
 - `{algo}_ep{N}.pth` — periodic checkpoints every 100 episodes
 

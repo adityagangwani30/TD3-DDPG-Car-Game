@@ -158,95 +158,84 @@ Robustness is tested under three noise regimes applied to sensor readings:
 
 ---
 
-## 🔬 Experiments
+## 🔬 Experiments & Camera-Ready Protocol
+
+The complete frozen protocol specification is documented in [EXPERIMENT_V2.md](EXPERIMENT_V2.md).
 
 ### Design Rationale
 
-The experiment grid uses a **full factorial design** to isolate how reward shaping and noise robustness interact with algorithmic choice:
+The experiment grid uses a **full factorial design** to isolate how reward shaping intensity and observation noise interact with algorithmic choice:
 
-$$\text{Experiments} = 4 \text{ Reward Modes} \times 3 \text{ Noise Levels} \times 2 \text{ Algorithms} = 24 \text{ configurations}$$
+$$\text{72 Runs} = 2 \text{ Algorithms} \times 4 \text{ Reward Modes} \times 3 \text{ Noise Levels} \times 3 \text{ Random Seeds}$$
 
-Each configuration is trained with 3 independent random seeds (0, 42, 123) for statistical validity.
+Each configuration is trained with 3 independent random seeds (0, 42, 123) as the primary statistical unit.
 
 ### Configuration
 
-| Parameter | Setting |
-|-----------|---------|
-| Episodes per run | 2,000 |
-| Max steps per episode | 300 |
-| Replay buffer capacity | 200,000 |
-| Batch size | 256 |
-| Training starts after | 5,000 steps |
-| Network architecture | 2 hidden layers, 64 units each |
-| Learning rates (actor & critic) | 3 × 10⁻⁴ |
-| Discount factor (γ) | 0.99 |
-| Soft update rate (τ) | 0.005 |
-| Exploration noise | 0.1, decaying at 0.9999/episode |
-| Random seeds | 0, 42, 123 |
+| Parameter | Setting | Description |
+|-----------|:---:|-------------|
+| Episodes per run | 2,000 | Complete training trajectory |
+| Max steps per episode ($T_{\max}$) | 600 | Horizon allowing feasible lap completion (min required: 382 steps) |
+| Replay buffer capacity | 200,000 | Fresh circular buffer per seed |
+| Batch size | 256 | Sampled transitions per gradient step |
+| Warmup steps | 5,000 | Random action exploration before updates |
+| Network architecture | 2 × 64 units | Actor and Critic hidden layers (ReLU) |
+| Learning rates (actor & critic) | 3 × 10⁻⁴ | Adam optimizer |
+| Discount factor (γ) | 0.99 | Standard RL discount factor |
+| Soft update rate (τ) | 0.005 | Target network Polyak averaging |
+| Exploration noise | 0.1 → 0.01 | Decaying at 0.9999/step |
+| Deterministic evaluation | 20 episodes | Performed on best checkpoint (noise OFF) |
+| Random seeds | 0, 42, 123 | Independent training replicates ($n=3$) |
 
 ### Output Organization
 
-Logs and models are organized hierarchically for easy access:
+Output directories for the corrected camera-ready experiment are isolated from legacy data:
 
 ```
-logs/
+logs_v2/
 ├── td3/
-│   ├── basic_noise_0.00/
-│   │   ├── seed_0/training_log.jsonl
-│   │   ├── seed_42/training_log.jsonl
-│   │   └── seed_123/training_log.jsonl
-│   └── tuned_noise_0.05/
-│       └── ...
-└── ddpg/
-    └── ...
-
-models/
-├── td3/
-│   ├── basic_noise_0.00/
+│   ├── R1_N1/
 │   │   ├── seed_0/
-│   │   │   ├── td3_best.pth
-│   │   │   ├── td3_best_avg100.pth
-│   │   │   └── td3_ep500.pth
-│   │   └── ...
+│   │   │   ├── metadata.json
+│   │   │   ├── training_log.jsonl
+│   │   │   ├── evaluation_log.jsonl
+│   │   │   └── evaluation_summary.json
+│   │   ├── seed_42/
+│   │   └── seed_123/
+│   └── ...
 └── ddpg/
     └── ...
+
+models_v2/
+├── td3/
+└── ddpg/
+
+results_v2/
+├── tables/              # Standardized CSV tables
+├── aggregated/          # JSON summary statistics
+├── per_seed/            # Per-seed JSON summaries
+└── plots/               # Publication figures (PNG + PDF)
 ```
+
+*(Legacy data from the original accepted paper is preserved in `logs/`, `models/`, and `results/` for historical reference).*
 
 ---
 
 ## 📊 Metrics
 
-All agents are evaluated on a consistent set of metrics — no single number captures the full picture:
+All agents are evaluated on a consistent set of metrics, strictly separating **training dynamics** from **deterministic evaluation**:
 
-### 1. Average Reward (mean ± std across seeds)
+### 1. Headline Deterministic Performance (20 episodes, noise OFF)
+- **Crash Rate (%):** Fraction of episodes ending in an off-track collision (lower is better).
+- **Lap Completion Rate (%):** Fraction of episodes completing $\ge 1$ full lap (higher is better).
+- **Track Distance (px):** Total Euclidean distance traversed (1 centerline lap = 2069 px).
+- **Survival Length (steps):** Mean steps survived per episode (up to 600).
+- **Evaluation Reward:** Policy reward accumulated during deterministic driving (evaluated strictly within each reward formulation).
 
-The primary signal of learning progress. Higher values indicate agents that accumulate more reward.
-
-- **Interpretation:** Reward captures incentives defined by the reward function.  
-- **Caveat:** Depends heavily on reward shaping; higher reward ≠ safer driving.
-
-### 2. Crash Rate (%)
-
-Percentage of episodes in which the agent leaves the track.
-
-- **Interpretation:** Safety proxy; lower is better.  
-- **Caveat:** Reward-based agents may crash if crashes are insufficiently penalized.
-
-### 3. Stability (Reward Variance)
-
-Standard deviation of rewards within a training run, averaged across seeds.
-
-- **Interpretation:** Learning consistency; lower variance = more predictable behavior.  
-- **Caveat:** Stable doesn't always mean good — a stable bad policy is still bad.
-
-### 4. Convergence Episode
-
-The episode at which the agent reaches 50% of its final average reward (over last 100 episodes).
-
-- **Interpretation:** Speed of learning; earlier = faster.  
-- **Caveat:** Faster convergence may indicate overoptimization to current reward, not true learning.
-
-### 5. Lap Completion Rate
+### 2. Training Dynamics (2,000 episodes)
+- **Episodic Reward & 100-Episode Rolling Average**
+- **Episodic Crash Rate & Lap Progression**
+- **Track Distance Growth Across Training**
 
 Percentage of episodes in which the agent completes at least one full lap.
 
@@ -348,23 +337,34 @@ pip install -r requirements.txt
 ### Train a Single Agent
 
 ```bash
-# Train TD3 with default settings (2000 episodes, rendered)
+### Pre-Flight Verification
+
+Before launching training runs, verify environment dynamics, replay buffer integrity, and configuration parameters:
+
+```bash
+python preflight_checks.py
+```
+
+### Train a Single Agent
+
+```bash
+# Train TD3 with default settings (2000 episodes, 600 max steps, rendered)
 python main.py --algo td3 --mode train
 
 # Train DDPG in headless mode (faster, no display)
 python main.py --algo ddpg --mode train --headless
 
 # Custom episode and step counts
-python main.py --algo td3 --mode train --max-episodes 1000 --max-steps 300 --headless
+python main.py --algo td3 --mode train --max-episodes 2000 --max-steps 600 --headless
 
 # Resume training from latest checkpoint
 python main.py --algo td3 --mode train --resume
 ```
 
-### Run Full Experiment Suite
+### Run Full Experiment Suite (Camera-Ready V2)
 
 ```bash
-# Run all 12 TD3 configurations (4 reward × 3 noise, headless)
+# Run all 12 TD3 configurations (4 reward × 3 noise across seeds 0, 42, 123)
 python run_experiments.py --algo td3 --headless
 
 # Run all 12 DDPG configurations
@@ -373,44 +373,43 @@ python run_experiments.py --algo ddpg --headless
 # Run a specific seed
 python run_experiments.py --algo td3 --seed 42 --headless
 
-# Resume interrupted experiments (skips completed runs)
+# Resume interrupted experiments (skips runs where 2000 eps AND evaluation are complete)
 python run_experiments.py --algo td3 --resume --headless
 ```
 
-### Evaluation & Visualization
+### Result Aggregation & Visualization
 
 ```bash
-# Evaluate a trained model (10 episodes, with rendering)
-python main.py --algo td3 --mode eval --render
+# Generate comprehensive CSV tables and PDF research report (Camera-Ready V2)
+python generate_td3_ddpg_report.py --logs-dir logs_v2 --results-dir results_v2 --strict
 
-# Run interactive demo
-python main.py --algo td3 --mode demo
+# Generate publication-quality figures (PNG + PDF)
+python plot_metrics.py --logs-dir logs_v2 --results-dir results_v2 --compare-algos
 
-# Generate all plots from existing logs
-python plot_metrics.py --compare-algos
-
-# Compare specific checkpoints
-python eval_models.py
+# Run deterministic evaluation across trained models (20 episodes per model)
+python eval_models.py --models-dir models_v2 --episodes 20 --headless
 ```
-
-### Running on Google Colab / Kaggle
-
-1. Open the Colab badge link at the top of this README.  
-2. The notebook handles dependencies, environment setup, and headless configuration.  
-3. Run cells sequentially — training executes in background with periodic updates.  
-4. Plots and logs are saved to the notebook's file system.
 
 ---
 
-## 📂 Outputs
+## 📂 Outputs & Directory Structure
 
-| Directory | Contents |
-|-----------|----------|
-| `logs/` | JSONL training logs; one file per (algo, config, seed) tuple with per-episode reward, crashes, laps, speed, and noise decay. |
-| `models/` | PyTorch `.pth` checkpoints; best episode, best 100-episode average, and periodic saves. |
-| `results/plots/` | Matplotlib figures organized by algorithm and comparison type. |
-| `results/grouped/` | Analysis plots organized by reward mode or noise level. |
-| `results/aggregate/` | Summary statistics and CSV exports. |
+| Directory | Role | Contents |
+|-----------|:---:|----------|
+| `logs_v2/` | **Camera-Ready** | JSONL logs, metadata, and 20-episode deterministic evaluation records per run. |
+| `models_v2/` | **Camera-Ready** | Trained `.pth` checkpoints (best model, best rolling avg 100, periodic). |
+| `results_v2/` | **Camera-Ready** | Standardized CSV tables (`condition_aggregate.csv`, `condition_results.csv`, `td3_vs_ddpg_comparisons.csv`), JSON aggregates, and publication figures (PNG + PDF). |
+| `logs/` | **Historical** | Preserved original accepted paper training logs (300-step horizon). |
+| `models/` | **Historical** | Preserved original checkpoints. |
+| `results/` | **Historical** | Preserved original analysis outputs. |
+
+---
+
+## 🚦 Current Status
+
+> [!IMPORTANT]
+> **PHASE 2 (72-RUN TRAINING EXPERIMENT) HAS NOT STARTED.**  
+> The codebase, deterministic evaluation pipeline, canonical aggregation scripts, and 16-point pre-flight validation suite are verified and awaiting launch authorization. No camera-ready experimental data has been generated yet.
 
 ---
 

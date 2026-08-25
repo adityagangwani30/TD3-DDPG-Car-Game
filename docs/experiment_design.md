@@ -31,48 +31,45 @@ Each configuration is trained with **3 independent random seeds** (0, 42, 123) f
 
 All experiments use the same hyperparameters (defined in `config.py`):
 
-| Parameter | Value |
-|-----------|-------|
-| Episodes per run | 2,000 |
-| Max steps per episode | 300 |
-| Replay buffer capacity | 200,000 |
-| Batch size | 256 |
-| Training starts after | 5,000 steps |
-| Network architecture | 2 hidden layers, 64 units each |
-| Actor learning rate | 3 × 10⁻⁴ |
-| Critic learning rate | 3 × 10⁻⁴ |
-| Discount factor (γ) | 0.99 |
-| Soft update rate (τ) | 0.005 |
-| Exploration noise | 0.1, decaying at 0.9999/episode |
-| Random seeds | 0, 42, 123 |
+| Parameter | Value | Description |
+|-----------|-------|-------------|
+| Episodes per run | 2,000 | Full training trajectory per run |
+| Max steps per episode ($T_{\max}$) | 600 | Horizon allowing feasible lap completion (min required: 382 steps) |
+| Replay buffer capacity | 200,000 | Shared uniform circular transition storage |
+| Batch size | 256 | Sampled transitions per gradient step |
+| Training starts after | 5,000 steps | Initial warmup under random action exploration |
+| Network architecture | 2 hidden layers, 64 units each | Fully connected with ReLU activations |
+| Actor learning rate | 3 × 10⁻⁴ | Adam optimizer |
+| Critic learning rate | 3 × 10⁻⁴ | Adam optimizer |
+| Discount factor (γ) | 0.99 | Standard RL discount |
+| Soft update rate (τ) | 0.005 | Target network Polyak averaging |
+| Exploration noise | 0.1 initial, decaying at 0.9999/step | Gaussian noise with 0.01 floor |
+| Deterministic evaluation | 20 episodes per model | Exploration noise strictly OFF |
+| Random seeds | 0, 42, 123 | 3 independent training replicates ($n=3$) |
 
 Keeping all settings fixed except the experimental variables (reward mode, noise level, algorithm) is essential for **controlled comparison**. Any observed performance differences can then be attributed to those variables rather than to confounding hyperparameter differences.
 
 ---
 
-## Metrics
+## Evaluation Methodology
 
-Each experiment is evaluated using multiple metrics:
+The camera-ready experimental protocol strictly separates **training metrics** from **final deterministic evaluation metrics**:
 
-### 1. Rolling Reward (window = 100)
+1. **Deterministic Evaluation Protocol:**
+   - After completing 2,000 training episodes, the best checkpoint is evaluated for **20 independent evaluation episodes**.
+   - Action selection uses `agent.select_action(state, add_noise=False)` with exploration noise strictly disabled.
+   - Outputs are serialized into `evaluation_log.jsonl` (per-episode records) and `evaluation_summary.json` (aggregate statistics).
 
-The rolling average of total episode reward over the last 100 episodes. Captures learning progress and asymptotic performance.
+2. **Headline Performance & Safety Metrics:**
+   - **Crash Rate:** Fraction of evaluation episodes terminating in off-track collision (lower is better).
+   - **Lap Completion Rate:** Fraction of evaluation episodes completing $\ge 1$ full centerline lap (higher is better).
+   - **Track Distance / Progress:** Total Euclidean path length traversed in pixels (higher is better; centerline lap = 2069 px).
+   - **Survival Length:** Steps survived before collision or timeout (up to 600 steps).
+   - **Evaluation Reward:** Policy reward accumulated during deterministic driving (evaluated strictly within each reward formulation).
 
-### 2. Crash Rate
-
-Percentage of episodes where the agent terminates by going off-track. Lower is better — this is a safety metric.
-
-### 3. Lap Completion Rate
-
-Percentage of episodes where the agent completes at least one full lap. Higher is better — this confirms task success.
-
-### 4. Stability (Reward Variance)
-
-Standard deviation of rewards within a run, averaged across seeds. Lower variance indicates more consistent behavior.
-
-### 5. Convergence Episode
-
-The episode at which the agent's rolling reward stabilizes (estimated computationally). Earlier convergence suggests faster learning.
+3. **Statistical Unit:**
+   - The primary statistical unit for paper comparisons is the **independent training seed** ($n=3$).
+   - Metrics are reported as $\text{Mean} \pm \text{SD}$ across the 3 seeds (seed 0, seed 42, seed 123). Evaluation episodes are not pooled across seeds.
 
 ---
 

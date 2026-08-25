@@ -153,8 +153,8 @@ This exploration noise is different from the target policy smoothing noise. Expl
    b. Compute target Q using twin critic targets + smoothing noise
    c. Update both critics via MSE loss
    d. Every 2 iterations: update actor, soft-update all target networks
-6. Decay exploration noise
-7. Repeat for up to 300 steps per episode, 2,000 episodes total
+6. Decay exploration noise (0.9999 per step, floor 0.01)
+7. Repeat for up to 600 steps per episode, 2,000 episodes total
 ```
 
 ---

@@ -15,6 +15,7 @@ from config import (
     BATCH_SIZE,
     BUFFER_CAPACITY,
     DEFAULT_SEED,
+    EVAL_EPISODES,
     EXPLORATION_NOISE,
     EXPLORATION_NOISE_DECAY,
     MAX_EPISODES,
@@ -173,6 +174,30 @@ def train_with_config(
                 f"(detected {last_logged_episode} completed episodes in log)."
             )
 
+    target_log_dir = getattr(metrics, "log_dir", target_model_dir)
+    os.makedirs(target_log_dir, exist_ok=True)
+    metadata_payload = {
+        "algorithm": algo,
+        "experiment_name": experiment_name,
+        "reward_mode": getattr(env, "reward_mode", "shaped"),
+        "sensor_noise_std": float(getattr(env, "sensor_noise_std", 0.0)),
+        "seed": resolved_seed,
+        "max_episodes": total_episodes,
+        "max_steps_per_episode": steps_per_episode,
+        "eval_episodes": EVAL_EPISODES,
+        "exploration_noise_initial": EXPLORATION_NOISE,
+        "exploration_noise_decay": EXPLORATION_NOISE_DECAY,
+        "exploration_noise_floor": 0.01,
+        "batch_size": BATCH_SIZE,
+        "buffer_capacity": BUFFER_CAPACITY,
+        "warmup_steps": TRAINING_START,
+        "throttle_mapping": "clip(action[1], 0, 1)",
+        "steering_mapping": "[-1, 1]",
+        "protocol_version": "V2_camera_ready",
+    }
+    with open(os.path.join(target_log_dir, "metadata.json"), "w", encoding="utf-8") as f:
+        json.dump(metadata_payload, f, indent=2)
+
     best_reward = -float("inf")
     best_reward_per_100 = -float("inf")
     reward_history = loaded_reward_history.copy()
@@ -184,6 +209,7 @@ def train_with_config(
         episode_length = 0
         episode_laps = 0
         episode_crashes = 0
+        episode_speeds = []
         termination_reason = "max_steps"
         render_enabled = _should_render_episode(episode) and RENDER_DURING_TRAINING
 
@@ -194,6 +220,7 @@ def train_with_config(
             next_state, reward, done, info = env.step(action)
             episode_reward += reward
             episode_length += 1
+            episode_speeds.append(info.get("speed", 0.0))
             if info.get("lap_completed", False):
                 episode_laps += 1
 
@@ -225,10 +252,16 @@ def train_with_config(
         episode_summary["length"] = int(episode_length)
         episode_summary["laps_completed"] = int(episode_laps)
         episode_summary["collisions"] = int(episode_crashes)
+        episode_summary["distance_traveled"] = float(info.get("distance_traveled", np.sum(episode_speeds)))
+        episode_summary["avg_speed"] = float(np.mean(episode_speeds)) if episode_speeds else 0.0
         episode_summary["termination_reason"] = termination_reason
         episode_summary["reward_rolling_avg_100"] = float(avg_reward_100)
         episode_summary["exploration_noise"] = exploration_noise
         episode_summary["replay_buffer_size"] = len(replay_buffer)
+        episode_summary["algorithm"] = algo
+        episode_summary["reward_mode"] = getattr(env, "reward_mode", "shaped")
+        episode_summary["sensor_noise_std"] = float(getattr(env, "sensor_noise_std", 0.0))
+        episode_summary["seed"] = resolved_seed
         metrics.log_episode(episode_summary)
 
         # Print summary
@@ -254,83 +287,203 @@ def train_with_config(
     print(f"{prefix}[train] Best episode reward: {best_reward:.2f}")
     print(f"{prefix}[train] Best 100-episode average: {best_reward_per_100:.2f}")
     print(f"{prefix}[train] Models saved to: {target_model_dir}")
+
+    # Run deterministic evaluation on the best checkpoint
+    best_checkpoint = os.path.join(target_model_dir, f"{model_prefix}{algo}_best_avg100.pth")
+    if not os.path.exists(best_checkpoint):
+        best_checkpoint = os.path.join(target_model_dir, f"{model_prefix}{algo}_best.pth")
+    if not os.path.exists(best_checkpoint):
+        best_checkpoint = None
+
+    target_log_dir = getattr(metrics, "log_dir", target_model_dir)
+    eval_log_file = os.path.join(target_log_dir, "evaluation_log.jsonl")
+    eval_summary_file = os.path.join(target_log_dir, "evaluation_summary.json")
+
+    eval_meta = {
+        "algo": algo,
+        "experiment_name": experiment_name,
+        "reward_mode": getattr(env, "reward_mode", "shaped"),
+        "sensor_noise_std": getattr(env, "sensor_noise_std", 0.0),
+        "seed": resolved_seed,
+        "checkpoint": best_checkpoint,
+        "max_steps_per_episode": steps_per_episode,
+    }
+
+    print(f"{prefix}[train] Running {EVAL_EPISODES} deterministic evaluation episodes...")
+    eval_results = evaluate(
+        env,
+        agent,
+        num_episodes=EVAL_EPISODES,
+        render=False,
+        checkpoint_path=best_checkpoint,
+        eval_log_path=eval_log_file,
+        eval_summary_path=eval_summary_file,
+        metadata=eval_meta,
+    )
+
     env.close()
+    return eval_results
 
 
-def evaluate(env: CarRacingEnv, agent, num_episodes: int = 10, 
-             render: bool = True, checkpoint_path: str | None = None,
-             preview_path: str | None = None) -> dict:
+def evaluate(
+    env: CarRacingEnv,
+    agent,
+    num_episodes: int = EVAL_EPISODES,
+    render: bool = False,
+    checkpoint_path: str | None = None,
+    preview_path: str | None = None,
+    eval_log_path: str | None = None,
+    eval_summary_path: str | None = None,
+    metadata: dict | None = None,
+) -> dict:
     """
-    Evaluate a trained agent without exploration noise.
+    Evaluate a trained agent with DETERMINISTIC actions (exploration noise OFF).
     
     Args:
         env: The environment to evaluate in
         agent: The agent to evaluate
-        num_episodes: Number of evaluation episodes
+        num_episodes: Number of evaluation episodes (default: 20)
         render: Whether to render the episodes
         checkpoint_path: Path to load checkpoint from (optional)
-        preview_path: Path to save a preview frame (works in both GUI and headless modes)
+        preview_path: Path to save a preview frame (optional)
+        eval_log_path: Path to save per-episode evaluation JSONL log (optional)
+        eval_summary_path: Path to save aggregated evaluation JSON summary (optional)
+        metadata: Extra metadata to record in summary (optional)
     
     Returns:
-        Dictionary with evaluation statistics
+        Dictionary with full raw episode metrics and aggregated statistics.
     """
     if checkpoint_path:
         agent.load(checkpoint_path)
 
-    results = {
-        "total_rewards": [],
-        "episode_lengths": [],
-        "laps_completed": [],
-        "crashes": 0,
-        "avg_reward": 0.0,
-        "avg_length": 0.0,
-        "avg_laps": 0.0,
-    }
+    raw_rewards = []
+    raw_lengths = []
+    raw_crashes = []
+    raw_laps = []
+    raw_distances = []
+    raw_speeds = []
+    raw_lap_times = []
+    
+    eval_logs = []
+    preview_saved = False
 
-    for ep in range(num_episodes):
+    for ep in range(1, num_episodes + 1):
         state = env.reset()
         done = False
         episode_reward = 0.0
         episode_length = 0
         episode_laps = 0
-        preview_saved = False
+        episode_crashed = 0
+        step_speeds = []
+        best_ep_lap_time = None
 
         while not done:
-            # Deterministic action (no noise)
+            # Deterministic action (exploration noise strictly OFF)
             action = agent.select_action(state, add_noise=False)
             state, reward, done, info = env.step(action)
             episode_reward += reward
             episode_length += 1
+            step_speeds.append(info.get("speed", 0.0))
 
             if info.get("lap_completed", False):
                 episode_laps += 1
+                lap_time = info.get("last_lap_time")
+                if lap_time:
+                    raw_lap_times.append(float(lap_time))
+                    if best_ep_lap_time is None or lap_time < best_ep_lap_time:
+                        best_ep_lap_time = lap_time
 
             if render:
                 env.render(enabled=True, limit_fps=True)
-                # Save preview frame (works in both GUI and headless modes)
                 if preview_path and not preview_saved:
                     env.save_frame(preview_path)
                     preview_saved = True
 
-        results["total_rewards"].append(episode_reward)
-        results["episode_lengths"].append(episode_length)
-        results["laps_completed"].append(episode_laps)
-        if info.get("termination_reason") == "off_track":
-            results["crashes"] += 1
+        termination_reason = info.get("termination_reason", "max_steps")
+        if termination_reason == "off_track":
+            episode_crashed = 1
 
-        print(f"Eval Episode {ep+1}/{num_episodes} | Reward: {episode_reward:+7.2f} | "
-              f"Length: {episode_length:4d} | Laps: {episode_laps:2d}")
+        dist = info.get("distance_traveled", float(np.sum(step_speeds)))
+        avg_ep_speed = float(np.mean(step_speeds)) if step_speeds else 0.0
 
-    # Compute statistics
-    results["avg_reward"] = np.mean(results["total_rewards"])
-    results["avg_length"] = np.mean(results["episode_lengths"])
-    results["avg_laps"] = np.mean(results["laps_completed"])
-    results["crash_rate"] = results["crashes"] / num_episodes
+        raw_rewards.append(float(episode_reward))
+        raw_lengths.append(int(episode_length))
+        raw_crashes.append(int(episode_crashed))
+        raw_laps.append(int(episode_laps))
+        raw_distances.append(float(dist))
+        raw_speeds.append(float(avg_ep_speed))
 
-    print("\n=== Evaluation Summary ===")
-    print(f"Average Reward: {results['avg_reward']:.2f}")
-    print(f"Average Episode Length: {results['avg_length']:.1f}")
-    print(f"Average Laps per Episode: {results['avg_laps']:.1f}")
-    print(f"Crash Rate: {results['crash_rate']:.1%}")
+        ep_record = {
+            "eval_episode": ep,
+            "reward": float(episode_reward),
+            "length": int(episode_length),
+            "crashed": int(episode_crashed),
+            "laps_completed": int(episode_laps),
+            "distance_traveled": float(dist),
+            "avg_speed": float(avg_ep_speed),
+            "termination_reason": termination_reason,
+            "best_lap_time": best_ep_lap_time,
+        }
+        eval_logs.append(ep_record)
 
-    return results
+    n = max(1, len(raw_rewards))
+    crash_rate = float(np.mean(raw_crashes))
+    lap_completion_rate = float(np.mean([1 if l > 0 else 0 for l in raw_laps]))
+    
+    summary = {
+        "num_episodes": n,
+        "crash_rate": crash_rate,
+        "lap_completion_rate": lap_completion_rate,
+        "total_laps_completed": int(np.sum(raw_laps)),
+        "mean_laps_per_episode": float(np.mean(raw_laps)),
+        "laps_std": float(np.std(raw_laps, ddof=1)) if n > 1 else 0.0,
+        "distance_mean": float(np.mean(raw_distances)),
+        "distance_std": float(np.std(raw_distances, ddof=1)) if n > 1 else 0.0,
+        "distance_sem": float(np.std(raw_distances, ddof=1) / np.sqrt(n)) if n > 1 else 0.0,
+        "avg_length": float(np.mean(raw_lengths)),
+        "length_std": float(np.std(raw_lengths, ddof=1)) if n > 1 else 0.0,
+        "length_sem": float(np.std(raw_lengths, ddof=1) / np.sqrt(n)) if n > 1 else 0.0,
+        "avg_reward": float(np.mean(raw_rewards)),
+        "reward_std": float(np.std(raw_rewards, ddof=1)) if n > 1 else 0.0,
+        "reward_sem": float(np.std(raw_rewards, ddof=1) / np.sqrt(n)) if n > 1 else 0.0,
+        "avg_speed": float(np.mean(raw_speeds)),
+        "speed_std": float(np.std(raw_speeds, ddof=1)) if n > 1 else 0.0,
+        "best_lap_time": min(raw_lap_times) if raw_lap_times else None,
+        "avg_lap_time": float(np.mean(raw_lap_times)) if raw_lap_times else None,
+        "raw_rewards": raw_rewards,
+        "raw_lengths": raw_lengths,
+        "raw_crashes": raw_crashes,
+        "raw_laps": raw_laps,
+        "raw_distances": raw_distances,
+        "raw_speeds": raw_speeds,
+        "raw_lap_times": raw_lap_times,
+    }
+    if metadata:
+        summary["metadata"] = metadata
+
+    if eval_log_path:
+        os.makedirs(os.path.dirname(os.path.abspath(eval_log_path)), exist_ok=True)
+        with open(eval_log_path, "w", encoding="utf-8") as f:
+            for rec in eval_logs:
+                f.write(json.dumps(rec) + "\n")
+
+    if eval_summary_path:
+        os.makedirs(os.path.dirname(os.path.abspath(eval_summary_path)), exist_ok=True)
+        with open(eval_summary_path, "w", encoding="utf-8") as f:
+            json.dump(summary, f, indent=2)
+
+    print("\n=== Deterministic Evaluation Summary (Exploration Noise OFF) ===")
+    print(f"Episodes Evaluated     : {n}")
+    print(f"Crash Rate             : {summary['crash_rate']:.1%}")
+    print(f"Lap Completion Rate    : {summary['lap_completion_rate']:.1%}")
+    print(f"Total Laps Completed   : {summary['total_laps_completed']}")
+    print(f"Mean Distance Traveled : {summary['distance_mean']:.1f} +/- {summary['distance_std']:.1f} px")
+    print(f"Mean Episode Length    : {summary['avg_length']:.1f} +/- {summary['length_std']:.1f} steps")
+    print(f"Mean Episode Reward    : {summary['avg_reward']:.2f} +/- {summary['reward_std']:.2f}")
+    print(f"Mean Speed             : {summary['avg_speed']:.2f} px/step")
+    if summary['best_lap_time'] is not None:
+        print(f"Best Lap Time          : {summary['best_lap_time']:.2f}s")
+    print("=================================================================\n")
+
+    return summary
+
