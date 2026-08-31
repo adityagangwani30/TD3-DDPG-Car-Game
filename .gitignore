@@ -78,4 +78,5 @@ htmlcov/
 
 .env
 .tokencap
-
+logs_v2
+models_v2
