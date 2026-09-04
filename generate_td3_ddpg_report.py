@@ -12,6 +12,7 @@ The script is intentionally defensive:
 from __future__ import annotations
 
 import argparse
+import csv
 import json
 import math
 import os
@@ -38,8 +39,8 @@ from reportlab.lib.utils import ImageReader
 from reportlab.platypus import Image, PageBreak, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 
 
-DEFAULT_RESULTS_DIR = Path("results")
-DEFAULT_LOGS_DIR = Path("logs")
+DEFAULT_RESULTS_DIR = Path("results_v2")
+DEFAULT_LOGS_DIR = Path("logs_v2")
 DEFAULT_OUTPUT_FILE = Path("td3_ddpg_research_report.pdf")
 DEFAULT_MODEL = "meta/llama-3.1-70b-instruct"
 DEFAULT_API_BASE = "https://integrate.api.nvidia.com/v1/chat/completions"
@@ -79,80 +80,211 @@ def load_env_file(env_path: Path) -> None:
 
 @dataclass
 class SeedMetrics:
-    """Metrics computed for one seed run of an experiment."""
+    """Deterministic evaluation and training progression metrics for one seed run."""
 
     seed: str
-    num_episodes: int
-    avg_reward_last_n: float
-    avg_crash_last_n: float
-    avg_laps_last_n: float
-    max_reward: float
-    convergence_episode: int
-    final_reward: float
-    reward_std: float
-    crash_std: float
+    num_episodes: int  # 20 deterministic eval episodes
+    avg_reward: float
+    reward_std: float  # within-seed sample SD (ddof=1)
+    reward_sem: float  # within-seed SEM
+    crash_rate: float  # 0.0 to 1.0
+    lap_completion_rate: float  # 0.0 to 1.0
+    total_laps_completed: int
+    mean_laps_per_episode: float
     laps_std: float
+    distance_mean: float
+    distance_std: float
+    distance_sem: float
+    avg_length: float
+    length_std: float
+    length_sem: float
+    avg_speed: float
+    speed_std: float
+    best_lap_time: float | None
+    avg_lap_time: float | None
+    checkpoint: str | None = None
+    convergence_episode: int | None = None
+    num_training_episodes: int | None = None
+    max_training_reward: float | None = None
+    final_training_reward: float | None = None
+
+    # Backward-compatible property aliases
+    @property
+    def avg_reward_last_n(self) -> float:
+        return self.avg_reward
+
+    @property
+    def avg_crash_last_n(self) -> float:
+        return self.crash_rate * 100.0
+
+    @property
+    def avg_laps_last_n(self) -> float:
+        return self.mean_laps_per_episode
+
+    @property
+    def crash_std(self) -> float:
+        return 0.0
+
+    @property
+    def final_reward(self) -> float:
+        return self.avg_reward
+
+    @property
+    def max_reward(self) -> float:
+        return self.avg_reward
 
 
 @dataclass
 class AlgorithmMetrics:
-    """Aggregated metrics for one algorithm within one experiment."""
+    """Aggregated condition-level metrics across seeds for one algorithm."""
 
     algorithm: str
     experiment: str
     seeds: list[SeedMetrics] = field(default_factory=list)
-    avg_reward_last_n_mean: float | None = None
-    avg_reward_last_n_variance: float | None = None
-    avg_crash_last_n_mean: float | None = None
-    avg_crash_last_n_variance: float | None = None
-    avg_laps_last_n_mean: float | None = None
-    avg_laps_last_n_variance: float | None = None
-    reward_std_mean: float | None = None
-    reward_std_variance: float | None = None
-    max_reward_mean: float | None = None
-    max_reward_variance: float | None = None
+    avg_reward_mean: float | None = None
+    avg_reward_std: float | None = None  # sample SD across seeds (ddof=1)
+    avg_reward_sem: float | None = None
+    crash_rate_mean: float | None = None  # 0.0 to 1.0
+    crash_rate_std: float | None = None  # sample SD across seeds (ddof=1)
+    crash_rate_sem: float | None = None
+    lap_completion_rate_mean: float | None = None
+    lap_completion_rate_std: float | None = None
+    lap_completion_rate_sem: float | None = None
+    mean_laps_mean: float | None = None
+    mean_laps_std: float | None = None
+    total_laps_mean: float | None = None
+    total_laps_std: float | None = None
+    distance_mean: float | None = None
+    distance_std: float | None = None
+    distance_sem: float | None = None
+    avg_length_mean: float | None = None
+    avg_length_std: float | None = None
+    avg_length_sem: float | None = None
+    avg_speed_mean: float | None = None
+    avg_speed_std: float | None = None
+    best_lap_time_min: float | None = None
+    best_lap_time_mean: float | None = None
+    avg_lap_time_mean: float | None = None
+    reward_std_mean: float | None = None  # mean of within-seed evaluation reward std
+    distance_std_mean: float | None = None  # mean of within-seed evaluation distance std
     convergence_episode_mean: float | None = None
-    convergence_episode_variance: float | None = None
-    final_reward_mean: float | None = None
-    final_reward_variance: float | None = None
-    num_episodes_mean: float | None = None
-    num_episodes_variance: float | None = None
+    convergence_episode_std: float | None = None
     status: str = "missing"
+
+    # Properties for downstream prompt/table/LLM compatibility
+    @property
+    def avg_reward_last_n_mean(self) -> float | None:
+        return self.avg_reward_mean
+
+    @property
+    def avg_reward_last_n_std(self) -> float | None:
+        return self.avg_reward_std
+
+    @property
+    def avg_reward_last_n_variance(self) -> float | None:
+        return (self.avg_reward_std ** 2) if self.avg_reward_std is not None else None
+
+    @property
+    def avg_crash_last_n_mean(self) -> float | None:
+        return (self.crash_rate_mean * 100.0) if self.crash_rate_mean is not None else None
+
+    @property
+    def avg_crash_last_n_std(self) -> float | None:
+        return (self.crash_rate_std * 100.0) if self.crash_rate_std is not None else None
+
+    @property
+    def avg_crash_last_n_variance(self) -> float | None:
+        return ((self.crash_rate_std * 100.0) ** 2) if self.crash_rate_std is not None else None
+
+    @property
+    def avg_laps_last_n_mean(self) -> float | None:
+        return self.mean_laps_mean
+
+    @property
+    def avg_laps_last_n_std(self) -> float | None:
+        return self.mean_laps_std
+
+    @property
+    def avg_laps_last_n_variance(self) -> float | None:
+        return (self.mean_laps_std ** 2) if self.mean_laps_std is not None else None
+
+    @property
+    def convergence_episode_variance(self) -> float | None:
+        return (self.convergence_episode_std ** 2) if self.convergence_episode_std is not None else None
+
+    @property
+    def final_reward_mean(self) -> float | None:
+        return self.avg_reward_mean
+
+    @property
+    def final_reward_std(self) -> float | None:
+        return self.avg_reward_std
+
+    @property
+    def final_reward_variance(self) -> float | None:
+        return (self.avg_reward_std ** 2) if self.avg_reward_std is not None else None
+
+    @property
+    def max_reward_mean(self) -> float | None:
+        return self.avg_reward_mean
+
+    @property
+    def max_reward_std(self) -> float | None:
+        return self.avg_reward_std
+
+    @property
+    def max_reward_variance(self) -> float | None:
+        return (self.avg_reward_std ** 2) if self.avg_reward_std is not None else None
+
+    @property
+    def num_episodes_mean(self) -> float | None:
+        return 20.0
+
+    @property
+    def num_episodes_std(self) -> float | None:
+        return 0.0
+
+    @property
+    def num_episodes_variance(self) -> float | None:
+        return 0.0
 
     def to_prompt_dict(self) -> dict[str, Any]:
         """Return a compact serialisable view for LLM prompts."""
-        reward_std = std_from_variance(self.avg_reward_last_n_variance)
-        crash_std = std_from_variance(self.avg_crash_last_n_variance)
-        laps_std = std_from_variance(self.avg_laps_last_n_variance)
-        convergence_std = std_from_variance(self.convergence_episode_variance)
+        crash_pct_mean = (self.crash_rate_mean * 100.0) if self.crash_rate_mean is not None else None
+        crash_pct_std = (self.crash_rate_std * 100.0) if self.crash_rate_std is not None else None
         return {
             "algorithm": self.algorithm,
             "status": self.status,
             "seed_count": len(self.seeds),
-            "avg_reward_last_n_mean": self.avg_reward_last_n_mean,
-            "avg_reward_last_n_variance": self.avg_reward_last_n_variance,
-            "avg_reward_last_n_std": reward_std,
-            "avg_reward_last_n_mean_pm_std": format_mean_pm(self.avg_reward_last_n_mean, reward_std),
-            "avg_crash_last_n_mean": self.avg_crash_last_n_mean,
-            "avg_crash_last_n_variance": self.avg_crash_last_n_variance,
-            "avg_crash_last_n_std": crash_std,
-            "avg_crash_last_n_mean_pm_std": format_mean_pm(self.avg_crash_last_n_mean, crash_std, unit="%"),
-            "avg_laps_last_n_mean": self.avg_laps_last_n_mean,
-            "avg_laps_last_n_variance": self.avg_laps_last_n_variance,
-            "avg_laps_last_n_std": laps_std,
-            "avg_laps_last_n_mean_pm_std": format_mean_pm(self.avg_laps_last_n_mean, laps_std),
-            "reward_std_mean": self.reward_std_mean,
-            "reward_std_variance": self.reward_std_variance,
-            "max_reward_mean": self.max_reward_mean,
-            "max_reward_variance": self.max_reward_variance,
+            "avg_reward_mean": self.avg_reward_mean,
+            "avg_reward_std": self.avg_reward_std,
+            "avg_reward_sem": self.avg_reward_sem,
+            "avg_reward_mean_pm_std": format_mean_pm(self.avg_reward_mean, self.avg_reward_std),
+            "crash_rate_mean_pct": crash_pct_mean,
+            "crash_rate_std_pct": crash_pct_std,
+            "crash_rate_mean_pm_std": format_mean_pm(crash_pct_mean, crash_pct_std, unit="%"),
+            "lap_completion_rate_mean": self.lap_completion_rate_mean,
+            "mean_laps_mean": self.mean_laps_mean,
+            "mean_laps_std": self.mean_laps_std,
+            "mean_laps_mean_pm_std": format_mean_pm(self.mean_laps_mean, self.mean_laps_std),
+            "distance_mean": self.distance_mean,
+            "distance_std": self.distance_std,
+            "distance_sem": self.distance_sem,
+            "avg_length_mean": self.avg_length_mean,
+            "avg_length_std": self.avg_length_std,
+            "avg_speed_mean": self.avg_speed_mean,
+            "best_lap_time_min": self.best_lap_time_min,
+            "reward_std_within_seed": self.reward_std_mean,
             "convergence_episode_mean": self.convergence_episode_mean,
-            "convergence_episode_variance": self.convergence_episode_variance,
-            "convergence_episode_std": convergence_std,
-            "convergence_episode_mean_pm_std": format_mean_pm(self.convergence_episode_mean, convergence_std, digits=0),
-            "final_reward_mean": self.final_reward_mean,
-            "final_reward_variance": self.final_reward_variance,
-            "num_episodes_mean": self.num_episodes_mean,
-            "num_episodes_variance": self.num_episodes_variance,
+            "convergence_episode_std": self.convergence_episode_std,
+            "convergence_episode_mean_pm_std": format_mean_pm(self.convergence_episode_mean, self.convergence_episode_std, digits=0),
+            # Aliases for prompt templates expecting last_n keys
+            "avg_reward_last_n_mean": self.avg_reward_mean,
+            "avg_reward_last_n_std": self.avg_reward_std,
+            "avg_crash_last_n_mean": crash_pct_mean,
+            "avg_crash_last_n_std": crash_pct_std,
+            "avg_laps_last_n_mean": self.mean_laps_mean,
+            "avg_laps_last_n_std": self.mean_laps_std,
         }
 
 
@@ -274,184 +406,268 @@ def estimate_convergence_episode(
     return len(rewards)
 
 
+def sample_variance_or_none(values: Sequence[float | None]) -> float | None:
+    """Return the sample variance (ddof=1) for a list, or None when unavailable."""
+    cleaned = [float(v) for v in values if v is not None and not math.isnan(float(v))]
+    if not cleaned:
+        return None
+    if len(cleaned) == 1:
+        return 0.0
+    return float(np.var(cleaned, ddof=1))
+
+
+def sample_std_or_none(values: Sequence[float | None]) -> float | None:
+    """Return the sample standard deviation (ddof=1) for a list, or None when unavailable."""
+    cleaned = [float(v) for v in values if v is not None and not math.isnan(float(v))]
+    if not cleaned:
+        return None
+    if len(cleaned) == 1:
+        return 0.0
+    return float(np.std(cleaned, ddof=1))
+
+
+def sem_or_none(values: Sequence[float | None]) -> float | None:
+    """Return the standard error of the mean (sample_std / sqrt(n))."""
+    cleaned = [float(v) for v in values if v is not None and not math.isnan(float(v))]
+    if not cleaned:
+        return None
+    if len(cleaned) == 1:
+        return 0.0
+    return float(np.std(cleaned, ddof=1) / np.sqrt(len(cleaned)))
+
+
+def variance_or_none(values: Sequence[float | None]) -> float | None:
+    """Sample variance alias for backward compatibility."""
+    return sample_variance_or_none(values)
+
+
+def mean_or_none(values: Sequence[float | None]) -> float | None:
+    """Return the arithmetic mean for a list, or None when unavailable."""
+    cleaned = [float(v) for v in values if v is not None and not math.isnan(float(v))]
+    if not cleaned:
+        return None
+    return float(statistics.fmean(cleaned))
+
+
+def load_seed_metrics(
+    seed_dir: Path,
+    rolling_window: int = DEFAULT_ROLLING_WINDOW,
+    stability_window: int = DEFAULT_STABILITY_WINDOW,
+    strict: bool = False,
+) -> SeedMetrics | None:
+    """Load deterministic evaluation metrics from evaluation_summary.json and training progression from training_log.jsonl."""
+    eval_sum_path = seed_dir / "evaluation_summary.json"
+    if not eval_sum_path.exists():
+        if strict:
+            raise ValueError(f"Strict validation failure: missing {eval_sum_path}")
+        return None
+
+    try:
+        with eval_sum_path.open("r", encoding="utf-8") as f:
+            eval_data = json.load(f)
+    except Exception as ex:
+        if strict:
+            raise ValueError(f"Strict validation failure: corrupted {eval_sum_path}: {ex}")
+        return None
+
+    # Load training logs for training curve / convergence metrics ONLY
+    training_log_path = seed_dir / "training_log.jsonl"
+    convergence_episode = None
+    num_training_episodes = None
+    max_training_reward = None
+    final_training_reward = None
+
+    if training_log_path.exists():
+        train_logs = load_jsonl_logs(training_log_path)
+        if train_logs:
+            ordered_train = sorted(train_logs, key=lambda item: safe_int(item.get("episode"), 0))
+            train_rewards = [safe_float(row.get("reward_total"), 0.0) for row in ordered_train]
+            if train_rewards:
+                num_training_episodes = len(train_rewards)
+                max_training_reward = float(np.max(train_rewards))
+                final_training_reward = float(train_rewards[-1])
+                convergence_episode = int(
+                    estimate_convergence_episode(
+                        train_rewards,
+                        rolling_window=rolling_window,
+                        stability_window=stability_window,
+                    )
+                )
+
+    seed_name = seed_dir.name.replace("seed_", "")
+    meta = eval_data.get("metadata", {})
+    if "seed" in meta:
+        seed_name = str(meta["seed"])
+
+    return SeedMetrics(
+        seed=seed_name,
+        num_episodes=safe_int(eval_data.get("num_episodes"), 20),
+        avg_reward=safe_float(eval_data.get("avg_reward")),
+        reward_std=safe_float(eval_data.get("reward_std")),
+        reward_sem=safe_float(eval_data.get("reward_sem")),
+        crash_rate=safe_float(eval_data.get("crash_rate")),
+        lap_completion_rate=safe_float(eval_data.get("lap_completion_rate")),
+        total_laps_completed=safe_int(eval_data.get("total_laps_completed")),
+        mean_laps_per_episode=safe_float(eval_data.get("mean_laps_per_episode")),
+        laps_std=safe_float(eval_data.get("laps_std")),
+        distance_mean=safe_float(eval_data.get("distance_mean")),
+        distance_std=safe_float(eval_data.get("distance_std")),
+        distance_sem=safe_float(eval_data.get("distance_sem")),
+        avg_length=safe_float(eval_data.get("avg_length")),
+        length_std=safe_float(eval_data.get("length_std")),
+        length_sem=safe_float(eval_data.get("length_sem")),
+        avg_speed=safe_float(eval_data.get("avg_speed")),
+        speed_std=safe_float(eval_data.get("speed_std")),
+        best_lap_time=safe_float(eval_data.get("best_lap_time")) if eval_data.get("best_lap_time") is not None else None,
+        avg_lap_time=safe_float(eval_data.get("avg_lap_time")) if eval_data.get("avg_lap_time") is not None else None,
+        checkpoint=meta.get("checkpoint"),
+        convergence_episode=convergence_episode,
+        num_training_episodes=num_training_episodes,
+        max_training_reward=max_training_reward,
+        final_training_reward=final_training_reward,
+    )
+
+
 def compute_seed_metrics(
     logs: list[dict[str, Any]],
     last_n: int = DEFAULT_LAST_N,
     rolling_window: int = DEFAULT_ROLLING_WINDOW,
     stability_window: int = DEFAULT_STABILITY_WINDOW,
 ) -> SeedMetrics | None:
-    """Compute metrics for one seed run."""
-    if not logs:
-        return None
-
-    ordered_logs = sorted(logs, key=lambda item: safe_int(item.get("episode"), 0))
-    rewards = [safe_float(row.get("reward_total"), 0.0) for row in ordered_logs]
-    crashes = [safe_float(row.get("collisions"), 0.0) for row in ordered_logs]
-    laps = [safe_float(row.get("laps_completed"), 0.0) for row in ordered_logs]
-    if not rewards:
-        return None
-
-    tail = min(last_n, len(rewards))
-    tail_rewards = rewards[-tail:]
-    tail_crashes = crashes[-tail:] if crashes else []
-    tail_laps = laps[-tail:] if laps else []
-
-    avg_reward_last_n = float(np.mean(tail_rewards))
-    avg_crash_last_n = float(np.mean(tail_crashes)) * 100.0 if tail_crashes else 0.0
-    avg_laps_last_n = float(np.mean(tail_laps)) if tail_laps else 0.0
-    max_reward = float(np.max(rewards))
-    convergence_episode = int(
-        estimate_convergence_episode(
-            rewards,
-            rolling_window=rolling_window,
-            stability_window=stability_window,
-        )
-    )
-    reward_std = float(np.std(tail_rewards))
-    crash_std = float(np.std(tail_crashes)) * 100.0 if tail_crashes else 0.0
-    laps_std = float(np.std(tail_laps)) if tail_laps else 0.0
-    final_reward = float(rewards[-1])
-    seed_value = ordered_logs[-1].get("seed", ordered_logs[0].get("seed", "unknown"))
-
-    return SeedMetrics(
-        seed=str(seed_value),
-        num_episodes=len(rewards),
-        avg_reward_last_n=avg_reward_last_n,
-        avg_crash_last_n=avg_crash_last_n,
-        avg_laps_last_n=avg_laps_last_n,
-        max_reward=max_reward,
-        convergence_episode=convergence_episode,
-        final_reward=final_reward,
-        reward_std=reward_std,
-        crash_std=crash_std,
-        laps_std=laps_std,
-    )
-
-
-def variance_or_none(values: Sequence[float | None]) -> float | None:
-    """Return the population variance for a list, or None when unavailable."""
-    values = [float(value) for value in values if value is not None]
-    if not values:
-        return None
-    if len(values) == 1:
-        return 0.0
-    return float(statistics.pvariance(values))
-
-
-def mean_or_none(values: Sequence[float | None]) -> float | None:
-    """Return the arithmetic mean for a list, or None when unavailable."""
-    values = [float(value) for value in values if value is not None]
-    if not values:
-        return None
-    return float(statistics.fmean(values))
+    """Legacy compatibility helper."""
+    return None
 
 
 def aggregate_seed_metrics(algorithm: str, experiment: str, seed_metrics: list[SeedMetrics]) -> AlgorithmMetrics | None:
-    """Aggregate seed-level metrics into an experiment-level summary."""
+    """Aggregate seed-level metrics into condition-level statistics using sample SD (ddof=1)."""
     if not seed_metrics:
         return None
 
-    avg_reward_last_n_values = [item.avg_reward_last_n for item in seed_metrics]
-    avg_crash_last_n_values = [item.avg_crash_last_n for item in seed_metrics]
-    avg_laps_last_n_values = [item.avg_laps_last_n for item in seed_metrics]
-    reward_std_values = [item.reward_std for item in seed_metrics]
-    max_reward_values = [item.max_reward for item in seed_metrics]
-    convergence_values = [float(item.convergence_episode) for item in seed_metrics]
-    final_reward_values = [item.final_reward for item in seed_metrics]
-    episode_counts = [float(item.num_episodes) for item in seed_metrics]
+    avg_rewards = [s.avg_reward for s in seed_metrics]
+    crash_rates = [s.crash_rate for s in seed_metrics]
+    lap_rates = [s.lap_completion_rate for s in seed_metrics]
+    mean_laps = [s.mean_laps_per_episode for s in seed_metrics]
+    total_laps = [float(s.total_laps_completed) for s in seed_metrics]
+    distances = [s.distance_mean for s in seed_metrics]
+    lengths = [s.avg_length for s in seed_metrics]
+    speeds = [s.avg_speed for s in seed_metrics]
+    best_laps = [s.best_lap_time for s in seed_metrics if s.best_lap_time is not None]
+    avg_laps = [s.avg_lap_time for s in seed_metrics if s.avg_lap_time is not None]
+    reward_stds_within = [s.reward_std for s in seed_metrics]
+    distance_stds_within = [s.distance_std for s in seed_metrics]
+    convergences = [float(s.convergence_episode) for s in seed_metrics if s.convergence_episode is not None]
 
     return AlgorithmMetrics(
         algorithm=algorithm,
         experiment=experiment,
         seeds=seed_metrics,
-        avg_reward_last_n_mean=mean_or_none(avg_reward_last_n_values),
-        avg_reward_last_n_variance=variance_or_none(avg_reward_last_n_values),
-        avg_crash_last_n_mean=mean_or_none(avg_crash_last_n_values),
-        avg_crash_last_n_variance=variance_or_none(avg_crash_last_n_values),
-        avg_laps_last_n_mean=mean_or_none(avg_laps_last_n_values),
-        avg_laps_last_n_variance=variance_or_none(avg_laps_last_n_values),
-        reward_std_mean=mean_or_none(reward_std_values),
-        reward_std_variance=variance_or_none(reward_std_values),
-        max_reward_mean=mean_or_none(max_reward_values),
-        max_reward_variance=variance_or_none(max_reward_values),
-        convergence_episode_mean=mean_or_none(convergence_values),
-        convergence_episode_variance=variance_or_none(convergence_values),
-        final_reward_mean=mean_or_none(final_reward_values),
-        final_reward_variance=variance_or_none(final_reward_values),
-        num_episodes_mean=mean_or_none(episode_counts),
-        num_episodes_variance=variance_or_none(episode_counts),
+        avg_reward_mean=mean_or_none(avg_rewards),
+        avg_reward_std=sample_std_or_none(avg_rewards),
+        avg_reward_sem=sem_or_none(avg_rewards),
+        crash_rate_mean=mean_or_none(crash_rates),
+        crash_rate_std=sample_std_or_none(crash_rates),
+        crash_rate_sem=sem_or_none(crash_rates),
+        lap_completion_rate_mean=mean_or_none(lap_rates),
+        lap_completion_rate_std=sample_std_or_none(lap_rates),
+        lap_completion_rate_sem=sem_or_none(lap_rates),
+        mean_laps_mean=mean_or_none(mean_laps),
+        mean_laps_std=sample_std_or_none(mean_laps),
+        total_laps_mean=mean_or_none(total_laps),
+        total_laps_std=sample_std_or_none(total_laps),
+        distance_mean=mean_or_none(distances),
+        distance_std=sample_std_or_none(distances),
+        distance_sem=sem_or_none(distances),
+        avg_length_mean=mean_or_none(lengths),
+        avg_length_std=sample_std_or_none(lengths),
+        avg_length_sem=sem_or_none(lengths),
+        avg_speed_mean=mean_or_none(speeds),
+        avg_speed_std=sample_std_or_none(speeds),
+        best_lap_time_min=min(best_laps) if best_laps else None,
+        best_lap_time_mean=mean_or_none(best_laps),
+        avg_lap_time_mean=mean_or_none(avg_laps),
+        reward_std_mean=mean_or_none(reward_stds_within),
+        distance_std_mean=mean_or_none(distance_stds_within),
+        convergence_episode_mean=mean_or_none(convergences),
+        convergence_episode_std=sample_std_or_none(convergences),
         status="complete",
     )
 
 
 def discover_experiment_ids(logs_dir: Path) -> list[str]:
-    """Discover experiment IDs shared across both algorithms."""
+    """Discover experiment IDs shared across algorithms (case-insensitive)."""
     experiments: set[str] = set()
     for algo in ALGORITHMS:
-        algo_dir = logs_dir / algo
-        if not algo_dir.exists():
+        for a in (algo.upper(), algo.lower(), algo):
+            algo_dir = logs_dir / a
+            if not algo_dir.exists():
+                continue
+            for child in algo_dir.iterdir():
+                if child.is_dir():
+                    has_eval_sum = (child / "evaluation_summary.json").exists() or any(child.glob("seed_*/evaluation_summary.json"))
+                    has_train_log = (child / "training_log.jsonl").exists() or any(child.glob("seed_*/training_log.jsonl"))
+                    if has_eval_sum or has_train_log:
+                        experiments.add(child.name)
+    return sorted(experiments, key=experiment_sort_key)
+
+
+def discover_seed_dirs(logs_dir: Path, algorithm: str, experiment: str) -> list[Path]:
+    """Return all seed directories for one algorithm/experiment pair (case-insensitive)."""
+    seed_dirs: list[Path] = []
+    for a in (algorithm.upper(), algorithm.lower(), algorithm):
+        exp_dir = logs_dir / a / experiment
+        if not exp_dir.exists():
             continue
-        for child in algo_dir.iterdir():
-            if child.is_dir():
-                if (child / "training_log.jsonl").exists() or any(child.glob("seed_*/training_log.jsonl")):
-                    experiments.add(child.name)
-    return sorted(experiments)
-
-
-def discover_seed_logs(logs_dir: Path, algorithm: str, experiment: str) -> list[Path]:
-    """Return all training-log files for one algorithm/experiment pair."""
-    exp_dir = logs_dir / algorithm / experiment
-    if not exp_dir.exists():
-        return []
-
-    legacy_log = exp_dir / "training_log.jsonl"
-    seed_logs = sorted(exp_dir.glob("seed_*/training_log.jsonl"))
-    if seed_logs:
-        return [path for path in seed_logs if path.is_file()]
-    if legacy_log.exists():
-        return [legacy_log]
-    return []
+        found = sorted(exp_dir.glob("seed_*"))
+        for p in found:
+            if p.is_dir() and p not in seed_dirs:
+                seed_dirs.append(p)
+        if not seed_dirs and ((exp_dir / "evaluation_summary.json").exists() or (exp_dir / "training_log.jsonl").exists()):
+            seed_dirs.append(exp_dir)
+    return sorted(seed_dirs)
 
 
 def collect_algorithm_metrics(
     logs_dir: Path,
     algorithm: str,
     experiment: str,
-    last_n: int = DEFAULT_LAST_N,
     rolling_window: int = DEFAULT_ROLLING_WINDOW,
     stability_window: int = DEFAULT_STABILITY_WINDOW,
+    strict: bool = False,
+    last_n: int = DEFAULT_LAST_N,
 ) -> AlgorithmMetrics | None:
-    """Collect and aggregate metrics for one algorithm within one experiment."""
-    seed_logs = discover_seed_logs(logs_dir, algorithm, experiment)
-    if not seed_logs:
+    """Collect and aggregate evaluation metrics for one algorithm within one experiment."""
+    seed_dirs = discover_seed_dirs(logs_dir, algorithm, experiment)
+    if not seed_dirs:
+        if strict:
+            raise ValueError(f"Strict validation failure: no seed directories found for {algorithm}/{experiment}")
         return None
 
     seed_metrics: list[SeedMetrics] = []
-    for log_file in seed_logs:
-        logs = load_jsonl_logs(log_file)
-        metrics = compute_seed_metrics(
-            logs,
-            last_n=last_n,
+    for sdir in seed_dirs:
+        sm = load_seed_metrics(
+            sdir,
             rolling_window=rolling_window,
             stability_window=stability_window,
+            strict=strict,
         )
-        if metrics is not None:
-            seed_metrics.append(metrics)
+        if sm is not None:
+            seed_metrics.append(sm)
 
-    aggregated = aggregate_seed_metrics(algorithm, experiment, seed_metrics)
-    if aggregated is None:
+    if not seed_metrics:
         return None
-    return aggregated
+
+    return aggregate_seed_metrics(algorithm, experiment, seed_metrics)
 
 
 def collect_experiment_reports(
     logs_dir: Path,
     experiment_ids: list[str] | None = None,
-    last_n: int = DEFAULT_LAST_N,
     rolling_window: int = DEFAULT_ROLLING_WINDOW,
     stability_window: int = DEFAULT_STABILITY_WINDOW,
+    strict: bool = False,
+    last_n: int = DEFAULT_LAST_N,
 ) -> list[ExperimentReport]:
-    """Collect metrics for every experiment that has at least one log file."""
+    """Collect evaluation metrics for every experiment."""
     if experiment_ids is None:
         experiment_ids = discover_experiment_ids(logs_dir)
 
@@ -461,17 +677,17 @@ def collect_experiment_reports(
             logs_dir,
             "td3",
             experiment,
-            last_n=last_n,
             rolling_window=rolling_window,
             stability_window=stability_window,
+            strict=strict,
         )
         ddpg_metrics = collect_algorithm_metrics(
             logs_dir,
             "ddpg",
             experiment,
-            last_n=last_n,
             rolling_window=rolling_window,
             stability_window=stability_window,
+            strict=strict,
         )
 
         if td3_metrics is None and ddpg_metrics is None:
@@ -1443,29 +1659,24 @@ def algorithm_metrics_lines(metrics: AlgorithmMetrics | None) -> list[str]:
     if metrics is None:
         return ["No metrics available."]
 
-    reward_std = std_from_variance(metrics.avg_reward_last_n_variance)
-    crash_std = std_from_variance(metrics.avg_crash_last_n_variance)
-    laps_std = std_from_variance(metrics.avg_laps_last_n_variance)
-    convergence_std = std_from_variance(metrics.convergence_episode_variance)
-
     return [
-        f"Avg reward (last N): {format_mean_pm(metrics.avg_reward_last_n_mean, reward_std)}",
-        f"Crash rate (last N): {format_mean_pm(metrics.avg_crash_last_n_mean, crash_std, unit='%')}",
-        f"Laps per episode (last N): {format_mean_pm(metrics.avg_laps_last_n_mean, laps_std)}",
-        f"Reward std (stability): {format_table_value(metrics.reward_std_mean)}",
-        f"Convergence episode: {format_mean_pm(metrics.convergence_episode_mean, convergence_std, digits=0)}",
+        f"Deterministic Eval Reward: {format_mean_pm(metrics.avg_reward_mean, metrics.avg_reward_std)}",
+        f"Crash Rate: {format_mean_pm(metrics.avg_crash_last_n_mean, metrics.avg_crash_last_n_std, unit='%')}",
+        f"Laps per Episode: {format_mean_pm(metrics.mean_laps_mean, metrics.mean_laps_std)}",
+        f"Within-seed Eval Stability: {format_table_value(metrics.reward_std_mean)}",
+        f"Training Convergence Episode: {format_mean_pm(metrics.convergence_episode_mean, metrics.convergence_episode_std, digits=0)}",
     ]
 
 
 def build_summary_table_rows(reports: list[ExperimentReport], styles) -> tuple[list[list[Paragraph]], list[str]]:
-    """Build the research-style summary table and collect skipped experiments."""
+    """Build the research-style summary table from deterministic evaluation metrics across seeds."""
     rows: list[list[Paragraph]] = [
         [
             Paragraph("Experiment", styles["TableCell"]),
-            Paragraph("TD3 Reward ± Std", styles["TableCell"]),
-            Paragraph("DDPG Reward ± Std", styles["TableCell"]),
-            Paragraph("TD3 Crash ± Std", styles["TableCell"]),
-            Paragraph("DDPG Crash ± Std", styles["TableCell"]),
+            Paragraph("TD3 Reward ± SD", styles["TableCell"]),
+            Paragraph("DDPG Reward ± SD", styles["TableCell"]),
+            Paragraph("TD3 Crash ± SD", styles["TableCell"]),
+            Paragraph("DDPG Crash ± SD", styles["TableCell"]),
             Paragraph("TD3 Conv", styles["TableCell"]),
             Paragraph("DDPG Conv", styles["TableCell"]),
         ]
@@ -1481,17 +1692,17 @@ def build_summary_table_rows(reports: list[ExperimentReport], styles) -> tuple[l
             [
                 Paragraph(report.experiment, styles["TableCellLeft"]),
                 Paragraph(
-                    format_mean_pm(report.td3.avg_reward_last_n_mean, std_from_variance(report.td3.avg_reward_last_n_variance)),
+                    format_mean_pm(report.td3.avg_reward_mean, report.td3.avg_reward_std),
                     styles["TableCell"],
                 ),
                 Paragraph(
-                    format_mean_pm(report.ddpg.avg_reward_last_n_mean, std_from_variance(report.ddpg.avg_reward_last_n_variance)),
+                    format_mean_pm(report.ddpg.avg_reward_mean, report.ddpg.avg_reward_std),
                     styles["TableCell"],
                 ),
                 Paragraph(
                     format_mean_pm(
                         report.td3.avg_crash_last_n_mean,
-                        std_from_variance(report.td3.avg_crash_last_n_variance),
+                        report.td3.avg_crash_last_n_std,
                         unit="%",
                     ),
                     styles["TableCell"],
@@ -1499,7 +1710,7 @@ def build_summary_table_rows(reports: list[ExperimentReport], styles) -> tuple[l
                 Paragraph(
                     format_mean_pm(
                         report.ddpg.avg_crash_last_n_mean,
-                        std_from_variance(report.ddpg.avg_crash_last_n_variance),
+                        report.ddpg.avg_crash_last_n_std,
                         unit="%",
                     ),
                     styles["TableCell"],
@@ -1507,7 +1718,7 @@ def build_summary_table_rows(reports: list[ExperimentReport], styles) -> tuple[l
                 Paragraph(
                     format_mean_pm(
                         report.td3.convergence_episode_mean,
-                        std_from_variance(report.td3.convergence_episode_variance),
+                        report.td3.convergence_episode_std,
                         digits=0,
                     ),
                     styles["TableCell"],
@@ -1515,7 +1726,7 @@ def build_summary_table_rows(reports: list[ExperimentReport], styles) -> tuple[l
                 Paragraph(
                     format_mean_pm(
                         report.ddpg.convergence_episode_mean,
-                        std_from_variance(report.ddpg.convergence_episode_variance),
+                        report.ddpg.convergence_episode_std,
                         digits=0,
                     ),
                     styles["TableCell"],
@@ -1945,14 +2156,14 @@ def build_report(
             Spacer(1, 1.12 * inch),
             Paragraph("TD3 vs DDPG Performance Analysis in Autonomous Driving Environment", styles["ReportTitle"]),
             Paragraph(
-                "Structured research-style report built from seed-aggregated logs, grouped noise-level plots, algorithm comparisons, and summary text.",
+                "Structured research-style report built from deterministic evaluation summaries (20 episodes, 600-step horizon, exploration noise OFF), seed-aggregated metrics, grouped noise-level plots, algorithm comparisons, and summary text.",
                 styles["ReportSubtitle"],
             ),
             Spacer(1, 0.28 * inch),
             Table(
                 [
                     [Paragraph("Project Title", styles["TableCellLeft"]), Paragraph("TD3 vs DDPG Performance Analysis in Autonomous Driving Environment", styles["TableCellLeft"])],
-                    [Paragraph("Description", styles["TableCellLeft"]), Paragraph("Comparison of reward systems across noise levels and algorithm behavior in a driving environment.", styles["TableCellLeft"])],
+                    [Paragraph("Description", styles["TableCellLeft"]), Paragraph("Comparison of reward systems across noise levels and algorithm behavior under deterministic evaluation.", styles["TableCellLeft"])],
                     [Paragraph("Generated", styles["TableCellLeft"]), Paragraph(generated_at, styles["TableCellLeft"])],
                 ],
                 colWidths=[1.35 * inch, 5.25 * inch],
@@ -1965,7 +2176,7 @@ def build_report(
     story.append(Paragraph("Summary Metrics", styles["SectionHeading"]))
     story.append(
         Paragraph(
-            "Metrics are reported as mean ± standard deviation where available. Crash rate is treated as a primary safety metric, and lower convergence episode indicates faster sample-efficient learning.",
+            "Evaluation metrics are reported as condition mean ± sample standard deviation (ddof=1) across independent training seeds. Crash rate represents deterministic collision frequency during evaluation, and convergence episode indicates sample-efficient training progression.",
             styles["ReportNote"],
         )
     )
@@ -2086,6 +2297,227 @@ def build_report(
     doc.build(story, onFirstPage=add_page_number, onLaterPages=add_page_number)
 
 
+def export_results_tables(reports: list[ExperimentReport], results_dir: Path) -> dict[str, str]:
+    """Export machine-readable run-level, condition-level, and comparison CSV/JSON files."""
+    results_dir.mkdir(parents=True, exist_ok=True)
+
+    # 1. Run-level evaluation results
+    run_rows: list[dict[str, Any]] = []
+    for report in reports:
+        for algo_name, algo_metrics in [("TD3", report.td3), ("DDPG", report.ddpg)]:
+            if algo_metrics is None:
+                continue
+            for seed_metric in algo_metrics.seeds:
+                reward_level, noise_level = parse_experiment_components(report.experiment)
+                run_rows.append({
+                    "algorithm": algo_name,
+                    "experiment": report.experiment,
+                    "condition": report.experiment,
+                    "reward_level": reward_level or "",
+                    "noise_level": noise_level or "",
+                    "seed": seed_metric.seed,
+                    "eval_episodes": seed_metric.num_episodes,
+                    "avg_reward": seed_metric.avg_reward,
+                    "reward_std": seed_metric.reward_std,
+                    "reward_sem": seed_metric.reward_sem,
+                    "crash_rate": seed_metric.crash_rate,
+                    "crash_rate_pct": seed_metric.crash_rate * 100.0,
+                    "lap_completion_rate": seed_metric.lap_completion_rate,
+                    "total_laps_completed": seed_metric.total_laps_completed,
+                    "mean_laps_per_episode": seed_metric.mean_laps_per_episode,
+                    "laps_std": seed_metric.laps_std,
+                    "distance_mean": seed_metric.distance_mean,
+                    "distance_std": seed_metric.distance_std,
+                    "distance_sem": seed_metric.distance_sem,
+                    "avg_length": seed_metric.avg_length,
+                    "length_std": seed_metric.length_std,
+                    "length_sem": seed_metric.length_sem,
+                    "avg_speed": seed_metric.avg_speed,
+                    "speed_std": seed_metric.speed_std,
+                    "best_lap_time": seed_metric.best_lap_time,
+                    "avg_lap_time": seed_metric.avg_lap_time,
+                    "convergence_episode": seed_metric.convergence_episode,
+                    "num_training_episodes": seed_metric.num_training_episodes,
+                    "checkpoint": seed_metric.checkpoint,
+                })
+
+    run_csv_path = results_dir / "run_level_eval_results.csv"
+    run_json_path = results_dir / "run_level_eval_results.json"
+    if run_rows:
+        with run_csv_path.open("w", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(f, fieldnames=list(run_rows[0].keys()))
+            writer.writeheader()
+            writer.writerows(run_rows)
+        with run_json_path.open("w", encoding="utf-8") as f:
+            json.dump(run_rows, f, indent=2)
+
+    # 2. Condition-level results across seeds
+    cond_rows: list[dict[str, Any]] = []
+    for report in reports:
+        for algo_name, algo_metrics in [("TD3", report.td3), ("DDPG", report.ddpg)]:
+            if algo_metrics is None:
+                continue
+            reward_level, noise_level = parse_experiment_components(report.experiment)
+            cond_rows.append({
+                "algorithm": algo_name,
+                "experiment": report.experiment,
+                "condition": report.experiment,
+                "reward_level": reward_level or "",
+                "noise_level": noise_level or "",
+                "seed_count": len(algo_metrics.seeds),
+                "avg_reward_mean": algo_metrics.avg_reward_mean,
+                "avg_reward_std": algo_metrics.avg_reward_std,
+                "avg_reward_sem": algo_metrics.avg_reward_sem,
+                "crash_rate_mean": algo_metrics.crash_rate_mean,
+                "crash_rate_std": algo_metrics.crash_rate_std,
+                "crash_rate_sem": algo_metrics.crash_rate_sem,
+                "crash_rate_mean_pct": (algo_metrics.crash_rate_mean * 100.0) if algo_metrics.crash_rate_mean is not None else None,
+                "lap_completion_rate_mean": algo_metrics.lap_completion_rate_mean,
+                "lap_completion_rate_std": algo_metrics.lap_completion_rate_std,
+                "lap_completion_rate_sem": algo_metrics.lap_completion_rate_sem,
+                "mean_laps_mean": algo_metrics.mean_laps_mean,
+                "mean_laps_std": algo_metrics.mean_laps_std,
+                "total_laps_mean": algo_metrics.total_laps_mean,
+                "total_laps_std": algo_metrics.total_laps_std,
+                "distance_mean": algo_metrics.distance_mean,
+                "distance_std": algo_metrics.distance_std,
+                "distance_sem": algo_metrics.distance_sem,
+                "avg_length_mean": algo_metrics.avg_length_mean,
+                "avg_length_std": algo_metrics.avg_length_std,
+                "avg_length_sem": algo_metrics.avg_length_sem,
+                "avg_speed_mean": algo_metrics.avg_speed_mean,
+                "avg_speed_std": algo_metrics.avg_speed_std,
+                "best_lap_time_min": algo_metrics.best_lap_time_min,
+                "reward_std_within_seed_mean": algo_metrics.reward_std_mean,
+                "convergence_episode_mean": algo_metrics.convergence_episode_mean,
+                "convergence_episode_std": algo_metrics.convergence_episode_std,
+            })
+
+    cond_csv_path = results_dir / "condition_level_eval_results.csv"
+    cond_json_path = results_dir / "condition_level_eval_results.json"
+    if cond_rows:
+        with cond_csv_path.open("w", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(f, fieldnames=list(cond_rows[0].keys()))
+            writer.writeheader()
+            writer.writerows(cond_rows)
+        with cond_json_path.open("w", encoding="utf-8") as f:
+            json.dump(cond_rows, f, indent=2)
+
+    # 3. TD3 vs DDPG comparison
+    comp_rows: list[dict[str, Any]] = []
+    for report in reports:
+        if report.td3 is None or report.ddpg is None:
+            continue
+        reward_level, noise_level = parse_experiment_components(report.experiment)
+
+        td3_rew = report.td3.avg_reward_mean
+        ddpg_rew = report.ddpg.avg_reward_mean
+        rew_diff = (td3_rew - ddpg_rew) if (td3_rew is not None and ddpg_rew is not None) else None
+
+        td3_crash = report.td3.crash_rate_mean
+        ddpg_crash = report.ddpg.crash_rate_mean
+        crash_diff = (td3_crash - ddpg_crash) if (td3_crash is not None and ddpg_crash is not None) else None
+
+        td3_lap = report.td3.lap_completion_rate_mean
+        ddpg_lap = report.ddpg.lap_completion_rate_mean
+        lap_diff = (td3_lap - ddpg_lap) if (td3_lap is not None and ddpg_lap is not None) else None
+
+        td3_dist = report.td3.distance_mean
+        ddpg_dist = report.ddpg.distance_mean
+        dist_diff = (td3_dist - ddpg_dist) if (td3_dist is not None and ddpg_dist is not None) else None
+
+        td3_conv = report.td3.convergence_episode_mean
+        ddpg_conv = report.ddpg.convergence_episode_mean
+        conv_diff = (td3_conv - ddpg_conv) if (td3_conv is not None and ddpg_conv is not None) else None
+
+        comp_rows.append({
+            "experiment": report.experiment,
+            "condition": report.experiment,
+            "reward_level": reward_level or "",
+            "noise_level": noise_level or "",
+            "td3_reward_mean": td3_rew,
+            "td3_reward_std": report.td3.avg_reward_std,
+            "ddpg_reward_mean": ddpg_rew,
+            "ddpg_reward_std": report.ddpg.avg_reward_std,
+            "reward_diff_td3_minus_ddpg": rew_diff,
+            "td3_crash_rate_mean": td3_crash,
+            "td3_crash_rate_std": report.td3.crash_rate_std,
+            "ddpg_crash_rate_mean": ddpg_crash,
+            "ddpg_crash_rate_std": report.ddpg.crash_rate_std,
+            "crash_diff_td3_minus_ddpg": crash_diff,
+            "td3_lap_rate_mean": td3_lap,
+            "td3_lap_rate_std": report.td3.lap_completion_rate_std,
+            "ddpg_lap_rate_mean": ddpg_lap,
+            "ddpg_lap_rate_std": report.ddpg.lap_completion_rate_std,
+            "lap_rate_diff_td3_minus_ddpg": lap_diff,
+            "td3_distance_mean": td3_dist,
+            "td3_distance_std": report.td3.distance_std,
+            "ddpg_distance_mean": ddpg_dist,
+            "ddpg_distance_std": report.ddpg.distance_std,
+            "distance_diff_td3_minus_ddpg": dist_diff,
+            "td3_convergence_mean": td3_conv,
+            "ddpg_convergence_mean": ddpg_conv,
+            "convergence_diff_td3_minus_ddpg": conv_diff,
+        })
+
+    comp_csv_path = results_dir / "td3_vs_ddpg_comparison_results.csv"
+    comp_json_path = results_dir / "td3_vs_ddpg_comparison_results.json"
+    if comp_rows:
+        with comp_csv_path.open("w", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(f, fieldnames=list(comp_rows[0].keys()))
+            writer.writeheader()
+            writer.writerows(comp_rows)
+        with comp_json_path.open("w", encoding="utf-8") as f:
+            json.dump(comp_rows, f, indent=2)
+
+    return {
+        "run_csv": str(run_csv_path),
+        "run_json": str(run_json_path),
+        "cond_csv": str(cond_csv_path),
+        "cond_json": str(cond_json_path),
+        "comp_csv": str(comp_csv_path),
+        "comp_json": str(comp_json_path),
+    }
+
+
+def validate_strict_evaluation_data(logs_dir: Path) -> None:
+    """Validate that all 72 camera-ready deterministic evaluation runs exist and are valid."""
+    missing_or_invalid: list[str] = []
+    for algo in ("TD3", "DDPG"):
+        for r in REWARD_LEVELS:
+            for n in NOISE_LEVELS:
+                cond = f"{r}_{n}"
+                for s in (0, 42, 123):
+                    run_id = f"{algo}/{cond}/seed_{s}"
+                    # Check uppercase and lowercase paths
+                    eval_path = None
+                    for a in (algo, algo.lower()):
+                        candidate = logs_dir / a / cond / f"seed_{s}" / "evaluation_summary.json"
+                        if candidate.exists():
+                            eval_path = candidate
+                            break
+                    if not eval_path:
+                        missing_or_invalid.append(f"{run_id}: evaluation_summary.json missing")
+                        continue
+
+                    try:
+                        with eval_path.open("r", encoding="utf-8") as f:
+                            data = json.load(f)
+                        num_ep = data.get("num_episodes")
+                        if num_ep != 20:
+                            missing_or_invalid.append(f"{run_id}: num_episodes is {num_ep}, expected 20")
+                        meta = data.get("metadata", {})
+                        max_steps = meta.get("max_steps_per_episode")
+                        if max_steps != 600:
+                            missing_or_invalid.append(f"{run_id}: max_steps_per_episode is {max_steps}, expected 600")
+                    except Exception as ex:
+                        missing_or_invalid.append(f"{run_id}: corrupted JSON ({ex})")
+
+    if missing_or_invalid:
+        err_report = "\n".join(f"  - {item}" for item in missing_or_invalid)
+        raise ValueError(f"Strict validation failed for {len(missing_or_invalid)}/72 runs:\n{err_report}")
+
+
 def main() -> None:
     """CLI entry point."""
     script_dir = Path(__file__).resolve().parent
@@ -2093,18 +2525,23 @@ def main() -> None:
     load_env_file(Path.cwd() / ".env")
 
     parser = argparse.ArgumentParser(description="Generate a TD3 vs DDPG PDF report")
-    parser.add_argument("--logs-dir", type=Path, default=DEFAULT_LOGS_DIR, help="Base logs directory")
+    parser.add_argument("--logs-dir", type=Path, default=DEFAULT_LOGS_DIR, help="Base logs directory (default: logs_v2)")
     parser.add_argument(
         "--results-dir",
         type=Path,
         default=DEFAULT_RESULTS_DIR,
-        help="Base results directory containing comparison/td3/ddpg plots",
+        help="Base results directory (default: results_v2)",
     )
     parser.add_argument(
         "--output",
         type=Path,
         default=DEFAULT_OUTPUT_FILE,
         help="Output PDF file path",
+    )
+    parser.add_argument(
+        "--strict",
+        action="store_true",
+        help="Enforce strict validation across all 72 evaluation runs (fail on any missing run)",
     )
     parser.add_argument(
         "--experiment",
@@ -2117,7 +2554,7 @@ def main() -> None:
         "--last-n",
         type=int,
         default=DEFAULT_LAST_N,
-        help="Number of trailing episodes used for average reward",
+        help="Number of trailing episodes used for average reward (legacy)",
     )
     parser.add_argument(
         "--rolling-window",
@@ -2157,6 +2594,11 @@ def main() -> None:
     )
     args = parser.parse_args()
 
+    if args.strict:
+        print("[report][strict] Validating camera-ready evaluation dataset across all 72 expected runs...")
+        validate_strict_evaluation_data(args.logs_dir)
+        print("[report][strict] All 72 evaluation summaries verified!")
+
     output_file = args.output
     if output_file.suffix.lower() != ".pdf":
         output_file = output_file.with_suffix(".pdf")
@@ -2165,10 +2607,17 @@ def main() -> None:
     reports = collect_experiment_reports(
         args.logs_dir,
         experiment_ids=experiment_ids,
-        last_n=max(1, int(args.last_n)),
         rolling_window=max(1, int(args.rolling_window)),
         stability_window=max(1, int(args.stability_window)),
+        strict=args.strict,
+        last_n=max(1, int(args.last_n)),
     )
+
+    args.results_dir.mkdir(parents=True, exist_ok=True)
+    exported_files = export_results_tables(reports, args.results_dir)
+    print(f"[report] Exported machine-readable results:")
+    for k, v in exported_files.items():
+        print(f"  - {k}: {v}")
 
     api_key = os.getenv(args.nvidia_api_key_env, "")
     llm_client = NvidiaLLMClient(

@@ -329,6 +329,7 @@ def evaluate(
     env: CarRacingEnv,
     agent,
     num_episodes: int = EVAL_EPISODES,
+    max_steps_per_episode: int = MAX_STEPS_PER_EPISODE,
     render: bool = False,
     checkpoint_path: str | None = None,
     preview_path: str | None = None,
@@ -343,6 +344,7 @@ def evaluate(
         env: The environment to evaluate in
         agent: The agent to evaluate
         num_episodes: Number of evaluation episodes (default: 20)
+        max_steps_per_episode: Maximum steps per evaluation episode (default: 600)
         render: Whether to render the episodes
         checkpoint_path: Path to load checkpoint from (optional)
         preview_path: Path to save a preview frame (optional)
@@ -377,7 +379,7 @@ def evaluate(
         step_speeds = []
         best_ep_lap_time = None
 
-        while not done:
+        for step in range(1, max_steps_per_episode + 1):
             # Deterministic action (exploration noise strictly OFF)
             action = agent.select_action(state, add_noise=False)
             state, reward, done, info = env.step(action)
@@ -398,6 +400,9 @@ def evaluate(
                 if preview_path and not preview_saved:
                     env.save_frame(preview_path)
                     preview_saved = True
+
+            if done:
+                break
 
         termination_reason = info.get("termination_reason", "max_steps")
         if termination_reason == "off_track":

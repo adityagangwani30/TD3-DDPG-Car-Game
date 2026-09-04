@@ -9,7 +9,8 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 
-from config import LOGS_DIR
+DEFAULT_LOGS_DIR = "logs_v2"
+DEFAULT_RESULTS_DIR = "results_v2"
 
 
 PLOT_DPI = 300
@@ -113,7 +114,12 @@ def sanitize_name(name: str) -> str:
 
 
 def _experiment_log_dir(base_log_dir: str, algo: str, experiment_id: str) -> Path:
-    return Path(base_log_dir) / algo / experiment_id
+    base = Path(base_log_dir)
+    for a in (algo.upper(), algo.lower(), algo):
+        cand = base / a / experiment_id
+        if cand.exists():
+            return cand
+    return base / algo / experiment_id
 
 
 def _seed_log_files(base_log_dir: str, algo: str, experiment_id: str) -> list[Path]:
@@ -148,20 +154,68 @@ def load_logs_from_file(log_file: Path) -> list[dict]:
 
 
 def discover_experiment_ids(base_log_dir: str, algo: str) -> list[str]:
-    """Discover experiment IDs under logs/{algo}/ that contain training logs."""
-    algo_dir = Path(base_log_dir) / algo
-    if not algo_dir.exists():
-        return []
-
+    """Discover experiment IDs under logs/{algo}/ that contain logs or evaluation summaries."""
+    base = Path(base_log_dir)
     ids = []
-    for child in sorted(algo_dir.iterdir()):
-        if not child.is_dir():
+    for a in (algo.upper(), algo.lower(), algo):
+        algo_dir = base / a
+        if not algo_dir.exists():
             continue
-        has_legacy_log = (child / "training_log.jsonl").exists()
-        has_seed_logs = any(child.glob("seed_*/training_log.jsonl"))
-        if has_legacy_log or has_seed_logs:
-            ids.append(child.name)
+        for child in sorted(algo_dir.iterdir()):
+            if not child.is_dir():
+                continue
+            has_legacy_log = (child / "training_log.jsonl").exists()
+            has_seed_logs = any(child.glob("seed_*/training_log.jsonl"))
+            has_eval_sum = (child / "evaluation_summary.json").exists() or any(child.glob("seed_*/evaluation_summary.json"))
+            if has_legacy_log or has_seed_logs or has_eval_sum:
+                if child.name not in ids:
+                    ids.append(child.name)
     return ids
+
+
+def load_experiment_eval_summary(base_log_dir: str, algo: str, experiment_id: str) -> dict[str, float] | None:
+    """Load deterministic evaluation summaries across seeds and compute condition mean and sample std (ddof=1)."""
+    exp_dir = _experiment_log_dir(base_log_dir, algo, experiment_id)
+    if not exp_dir.exists():
+        return None
+
+    eval_files = sorted(exp_dir.glob("seed_*/evaluation_summary.json"))
+    if not eval_files:
+        legacy_file = exp_dir / "evaluation_summary.json"
+        if legacy_file.exists():
+            eval_files = [legacy_file]
+
+    if not eval_files:
+        return None
+
+    rewards = []
+    crashes = []
+    for ef in eval_files:
+        try:
+            with open(ef, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            rew = float(data.get("avg_reward", 0.0))
+            crash = float(data.get("crash_rate", 0.0)) * 100.0  # Percentage 0..100%
+            rewards.append(rew)
+            crashes.append(crash)
+        except Exception:
+            continue
+
+    if not rewards:
+        return None
+
+    mean_reward = float(np.mean(rewards))
+    std_reward = float(np.std(rewards, ddof=1)) if len(rewards) > 1 else 0.0
+    mean_crash = float(np.mean(crashes))
+    std_crash = float(np.std(crashes, ddof=1)) if len(crashes) > 1 else 0.0
+
+    return {
+        "reward": mean_reward,
+        "reward_std": std_reward,
+        "crash": mean_crash,
+        "crash_std": std_crash,
+        "num_seeds": len(rewards),
+    }
 
 
 def resolve_experiment_ids(base_log_dir: str, algo: str, experiment_args: list[str] | None) -> list[str]:
@@ -864,11 +918,19 @@ def _plot_tradeoff_scatter(
                     alpha=0.95,
                 )
 
-    ax.set_title("Performance-Safety Trade-off: Reward vs Crash Rate (TD3 vs DDPG)")
-    ax.set_xlabel("Average Reward (mean +/- std)", fontsize=FONT_SIZE)
-    ax.set_ylabel("Crash Rate (mean +/- std)", fontsize=FONT_SIZE)
+    ax.set_title("Performance-Safety Trade-off: Evaluation Reward vs Crash Rate (TD3 vs DDPG)")
+    ax.set_xlabel("Average Evaluation Reward (mean +/- std)", fontsize=FONT_SIZE)
+    ax.set_ylabel("Evaluation Crash Rate (%) (mean +/- std)", fontsize=FONT_SIZE)
     ax.tick_params(axis="both", labelsize=FONT_SIZE)
-    ax.set_ylim(0.75, 1.02)
+    if all_crashes.size > 0:
+        c_min = max(0.0, float(np.nanmin(all_crashes)) - 5.0)
+        c_max = min(105.0, float(np.nanmax(all_crashes)) + 5.0)
+        if c_max > c_min:
+            ax.set_ylim(c_min, c_max)
+        else:
+            ax.set_ylim(-5, 105)
+    else:
+        ax.set_ylim(-5, 105)
     ax.invert_yaxis()
     ax.margins(x=0.05)
 
@@ -972,32 +1034,37 @@ def plot_algo_comparisons(base_log_dir: str, experiment_ids: list[str], output_d
         ddpg_laps_all.append(ddpg_series["laps_total"])
 
         exp_label = format_experiment_label(exp_id)
-        tradeoff_points.append(
-            {
-                "algo": "td3",
-                "experiment": exp_id,
-                "experiment_label": exp_label,
-                "reward": _tail_mean(td3_series["reward_total"], window),
-                "crash": _tail_mean(td3_series["crash_total"], window),
-                "reward_std": _tail_mean(td3_series["reward_total_std"], window),
-                "crash_std": _tail_mean(td3_series["crash_total_std"], window),
-                "global_idx": tradeoff_index,
-            }
-        )
-        tradeoff_index += 1
-        tradeoff_points.append(
-            {
-                "algo": "ddpg",
-                "experiment": exp_id,
-                "experiment_label": exp_label,
-                "reward": _tail_mean(ddpg_series["reward_total"], window),
-                "crash": _tail_mean(ddpg_series["crash_total"], window),
-                "reward_std": _tail_mean(ddpg_series["reward_total_std"], window),
-                "crash_std": _tail_mean(ddpg_series["crash_total_std"], window),
-                "global_idx": tradeoff_index,
-            }
-        )
-        tradeoff_index += 1
+        td3_eval = load_experiment_eval_summary(base_log_dir, "td3", exp_id)
+        if td3_eval is not None:
+            tradeoff_points.append(
+                {
+                    "algo": "td3",
+                    "experiment": exp_id,
+                    "experiment_label": exp_label,
+                    "reward": td3_eval["reward"],
+                    "crash": td3_eval["crash"],
+                    "reward_std": td3_eval["reward_std"],
+                    "crash_std": td3_eval["crash_std"],
+                    "global_idx": tradeoff_index,
+                }
+            )
+            tradeoff_index += 1
+
+        ddpg_eval = load_experiment_eval_summary(base_log_dir, "ddpg", exp_id)
+        if ddpg_eval is not None:
+            tradeoff_points.append(
+                {
+                    "algo": "ddpg",
+                    "experiment": exp_id,
+                    "experiment_label": exp_label,
+                    "reward": ddpg_eval["reward"],
+                    "crash": ddpg_eval["crash"],
+                    "reward_std": ddpg_eval["reward_std"],
+                    "crash_std": ddpg_eval["crash_std"],
+                    "global_idx": tradeoff_index,
+                }
+            )
+            tradeoff_index += 1
 
         td3_plot = {
             **td3_series,
@@ -1157,10 +1224,18 @@ def main():
         help="Generate TD3 vs DDPG comparison plots (ignores --algo)",
     )
     parser.add_argument(
+        "--logs-dir",
         "--log-dir",
+        dest="logs_dir",
         type=str,
-        default=LOGS_DIR,
-        help=f"Base logs directory (default: {LOGS_DIR})",
+        default=DEFAULT_LOGS_DIR,
+        help=f"Base logs directory (default: {DEFAULT_LOGS_DIR})",
+    )
+    parser.add_argument(
+        "--results-dir",
+        type=str,
+        default=DEFAULT_RESULTS_DIR,
+        help=f"Base results output directory (default: {DEFAULT_RESULTS_DIR})",
     )
     parser.add_argument(
         "--experiments",
@@ -1182,24 +1257,28 @@ def main():
     parser.add_argument(
         "--individual-output",
         type=str,
-        default=os.path.join("results", "plots"),
-        help="Base output directory for individual plots (default: results/plots)",
+        default=None,
+        help="Base output directory for individual plots (default: <results_dir>/plots)",
     )
     parser.add_argument(
         "--comparison-output",
         type=str,
-        default=os.path.join("results", "plots", "comparison"),
-        help="Output directory for TD3 vs DDPG plots (default: results/plots/comparison)",
+        default=None,
+        help="Output directory for TD3 vs DDPG plots (default: <results_dir>/plots/comparison)",
     )
     parser.add_argument(
         "--grouped-output",
         type=str,
-        default=os.path.join("results", "grouped"),
-        help="Output directory for grouped noise-level comparison plots (default: results/grouped)",
+        default=None,
+        help="Output directory for grouped noise-level comparison plots (default: <results_dir>/grouped)",
     )
     args = parser.parse_args()
 
     window = max(1, int(args.window))
+    individual_output = args.individual_output or os.path.join(args.results_dir, "plots")
+    comparison_output = args.comparison_output or os.path.join(args.results_dir, "plots", "comparison")
+    grouped_output = args.grouped_output or os.path.join(args.results_dir, "grouped")
+    aggregate_output = os.path.join(args.results_dir, "aggregate")
 
     if not args.compare_algos and args.algo is None:
         raise ValueError("You must specify --algo {td3, ddpg}")
@@ -1208,8 +1287,8 @@ def main():
         if args.experiments:
             experiment_ids = [str(exp).strip() for exp in args.experiments]
         else:
-            td3_ids = set(discover_experiment_ids(args.log_dir, "td3"))
-            ddpg_ids = set(discover_experiment_ids(args.log_dir, "ddpg"))
+            td3_ids = set(discover_experiment_ids(args.logs_dir, "td3"))
+            ddpg_ids = set(discover_experiment_ids(args.logs_dir, "ddpg"))
             experiment_ids = sorted(td3_ids.union(ddpg_ids))
 
         if not experiment_ids:
@@ -1217,37 +1296,37 @@ def main():
             return
 
         plot_algo_comparisons(
-            base_log_dir=args.log_dir,
+            base_log_dir=args.logs_dir,
             experiment_ids=experiment_ids,
-            output_dir=args.comparison_output,
+            output_dir=comparison_output,
             window=window,
             smooth=args.smooth,
         )
         plot_grouped_noise_comparisons(
-            base_log_dir=args.log_dir,
+            base_log_dir=args.logs_dir,
             experiment_ids=experiment_ids,
-            output_dir=args.grouped_output,
+            output_dir=grouped_output,
             rolling_window=window,
         )
         plot_all_experiment_aggregates(
-            base_log_dir=args.log_dir,
+            base_log_dir=args.logs_dir,
             experiment_ids=experiment_ids,
-            output_dir=os.path.join("results", "aggregate"),
+            output_dir=aggregate_output,
             window=window,
         )
         print(f"[plot] Comparison mode complete for up to {len(experiment_ids)} experiments.")
         return
 
     algo = args.algo
-    experiment_ids = resolve_experiment_ids(args.log_dir, algo, args.experiments)
+    experiment_ids = resolve_experiment_ids(args.logs_dir, algo, args.experiments)
     if not experiment_ids:
-        print(f"[plot][warn] No experiment logs found under logs/{algo}/")
+        print(f"[plot][warn] No experiment logs found under {args.logs_dir}/{algo}/")
         return
 
     plotted = 0
     for exp_id in experiment_ids:
         series = load_experiment_series(
-            base_log_dir=args.log_dir,
+            base_log_dir=args.logs_dir,
             algo=algo,
             experiment_id=exp_id,
             rolling_window=window,
@@ -1256,7 +1335,7 @@ def main():
             print(f"[plot][warn] Missing logs for: {algo}/{exp_id}")
             continue
 
-        out_dir = os.path.join(args.individual_output, algo, "individual", sanitize_name(exp_id))
+        out_dir = os.path.join(individual_output, algo, "individual", sanitize_name(exp_id))
         plot_individual_experiment(
             algo=algo,
             experiment_id=exp_id,
