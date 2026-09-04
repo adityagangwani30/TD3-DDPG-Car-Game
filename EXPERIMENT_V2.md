@@ -99,6 +99,7 @@ No parallel `_v2.py` analysis scripts exist; version separation is maintained st
 
 ## 8. Current Experiment Execution Status
 
-> [!IMPORTANT]
-> **CURRENT STATUS: PHASE 2 (72-RUN TRAINING EXECUTION) IS NOT STARTED.**  
-> Code corrections, deterministic evaluation pipelines, canonical aggregation scripts, and 16-point pre-flight checks are fully verified and waiting for explicit execution authorization. No camera-ready training runs have been executed yet.
+> [!NOTE]
+> **CURRENT STATUS: PHASE 2 (72-RUN TRAINING & DETERMINISTIC EVALUATION) IS COMPLETE AND FULLY VERIFIED.**  
+> All 72 runs across TD3 and DDPG (12 conditions × 3 seeds) have completed full 2,000-episode training under the 600-step horizon, completed 20-episode deterministic evaluation on `best_avg100.pth`, passed the exhaustive technical re-audit (72/72 verified), and generated camera-ready publication figures and tables in `results_v2/`.
+

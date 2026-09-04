@@ -248,7 +248,8 @@ Percentage of episodes in which the agent completes at least one full lap.
 ## 🎯 Key Insights & Trade-offs
 
 > [!NOTE]
-> **Historical baseline note:** The observations below summarize the original accepted-paper experiment conducted under the previous 300-step episode horizon. The corrected camera-ready protocol uses a 600-step horizon and will be re-evaluated in the Phase 2 72-run experimental suite. Final camera-ready conclusions will be based on the corrected experiment.
+> **Camera-Ready V2 Results:** The findings and insights below reflect the completed Phase 2 experimental suite (72 runs, 2,000 episodes, 600-step horizon, 20 deterministic evaluation episodes per model). Machine-readable tables, aggregate summaries, and high-resolution figures are available in `results_v2/`.
+
 
 This section summarizes patterns observed across the 24 configurations. **No single algorithm or configuration dominates all metrics.**
 
